@@ -1,14 +1,14 @@
-# Solana PumpFun/PumpSwap Copy Trading Bot
+# Solana PumpFun/PumpSwap Sniper Bot
 
-This is a high-performance Rust-based copy trading bot that monitors and replicates trading activity on Solana DEXs like PumpFun and PumpSwap. The bot uses advanced transaction monitoring to detect and copy trades in real-time, giving you an edge in the market.
+This is a high-performance Rust-based sniper bot that monitors and executes trades on Solana DEXs like PumpFun and PumpSwap with lightning-fast speed. The bot uses advanced transaction monitoring to detect and execute trades in real-time, giving you an edge in the market.
 
 The bot specifically tracks `buy` and `create` transactions on PumpFun, as well as token migrations from PumpFun to Raydium when the `initialize2` instruction is involved and the migration pubkey (`39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg`) is present.
 
 ## Features:
 
+- **Lightning-Fast Execution** - Sub-second trade execution using optimized RPC calls and direct transaction building
 - **Real-time Transaction Monitoring** - Uses Yellowstone gRPC to monitor transactions with minimal latency and high reliability
-- **Multi-Protocol Support** - Compatible with both PumpFun and PumpSwap DEX platforms for maximum trading opportunities
-- **Automated Copy Trading** - Instantly replicates buy and sell transactions from monitored wallets
+- **Multi-Protocol Support** - Compatible with PumpFun, PumpSwap, and Raydium DEX platforms for maximum trading opportunities
 - **Smart Transaction Parsing** - Advanced transaction analysis to accurately identify and process trading activities
 - **Configurable Trading Parameters** - Customizable settings for trade amounts, timing, and risk management
 - **Built-in Selling Strategy** - Intelligent profit-taking mechanisms with customizable exit conditions
@@ -18,11 +18,19 @@ The bot specifically tracks `buy` and `create` transactions on PumpFun, as well 
 - **WSOL Wrapping/Unwrapping** - Built-in SOL to WSOL conversion utilities for trading operations
 - **Cache System** - Intelligent caching for improved performance and reduced RPC calls
 - **Transaction Retry Logic** - Robust retry mechanisms for failed transactions
+- **Whale Detection** - Advanced algorithms to detect and follow large wallet movements
+- **MEV Protection** - Built-in protection against Maximal Extractable Value attacks
+- **Slippage Control** - Dynamic slippage adjustment based on market conditions
+- **Gas Optimization** - Intelligent gas fee management for cost-effective trading
 
 # Who is it for?
 
-- Bot users looking for the fastest transaction feed possible for Pumpfun or Raydium (Sniping, Arbitrage, etc).
-- Validators who want an edge by decoding shreds locally.
+- **Crypto Traders** - Looking for the fastest execution possible on PumpFun, PumpSwap, and Raydium
+- **Sniper Bot Users** - Want to catch new token launches and early trading opportunities
+- **Arbitrage Traders** - Need lightning-fast execution for price discrepancies across DEXs
+- **Whale Followers** - Want to track and follow large wallet movements
+- **Validators** - Looking for an edge by decoding shreds locally
+- **MEV Hunters** - Seeking opportunities in the mempool for profit extraction
 
 # Setting up
 
@@ -47,25 +55,28 @@ RUSTFLAGS="-C target-cpu=native" RUST_LOG=info cargo run --release --bin shredst
 
 If you are really interested in the source code, please contact me for details and demo on Discord: `.xanr`.
 
-# Solana Copy Trading Bot
+# Solana Sniper Bot
 
-A high-performance Rust-based application that monitors transactions from specific wallet addresses and automatically copies their trading activity on Solana DEXs like PumpFun and PumpSwap.
+A high-performance Rust-based application that monitors transactions and executes trades with lightning speed on Solana DEXs like PumpFun, PumpSwap, and Raydium.
 
 ## Features
 
+- **Lightning-Fast Execution** - Sub-second trade execution with optimized RPC calls
 - **Real-time Transaction Monitoring** - Uses Yellowstone gRPC to get transaction data with minimal latency
 - **Multi-address Support** - Can monitor multiple wallet addresses simultaneously
-- **Protocol Support** - Compatible with PumpFun and PumpSwap DEX platforms
-- **Automated Trading** - Copies buy and sell transactions automatically when detected
+- **Protocol Support** - Compatible with PumpFun, PumpSwap, and Raydium DEX platforms
+- **Automated Trading** - Executes buy and sell transactions automatically when conditions are met
 - **Notification System** - Sends trade alerts and status updates via Telegram
 - **Customizable Trading Parameters** - Configurable limits, timing, and amount settings
 - **Selling Strategy** - Includes built-in selling strategy options for maximizing profits
+- **Whale Detection** - Advanced algorithms to detect and follow large wallet movements
+- **MEV Protection** - Built-in protection against Maximal Extractable Value attacks
 
 ## Project Structure
 
 The codebase is organized into several modules:
 
-- **engine/** - Core trading logic including copy trading, selling strategies, transaction parsing, and retry mechanisms
+- **engine/** - Core trading logic including sniper bot functionality, selling strategies, transaction parsing, and retry mechanisms
 - **dex/** - Protocol-specific implementations for PumpFun, PumpSwap, and Raydium
 - **common/** - Shared utilities, configuration, constants, caching, and logging
 - **core/** - Core system functionality for tokens and transactions
@@ -116,13 +127,15 @@ cargo run --release -- --unwrap
 cargo run --release -- --close
 ```
 
-Once started, the bot will:
+Once started, the sniper bot will:
 
 1. Connect to the Yellowstone gRPC endpoint
 2. Monitor transactions from the specified wallet address(es)
-3. Automatically copy buy and sell transactions as they occur
+3. Automatically execute buy and sell transactions when conditions are met
 4. Send notifications via Telegram for detected transactions and executed trades
 5. Manage token accounts and WSOL conversions automatically
+6. Detect whale movements and large transactions
+7. Execute trades with minimal latency for maximum profit potential
 
 ## Recent Updates
 
@@ -135,6 +148,9 @@ Once started, the bot will:
 - Added cache system for improved performance
 - Enhanced transaction retry logic for better reliability
 - Streamlined codebase by removing external API dependencies
+- Optimized for sniper bot functionality with lightning-fast execution
+- Added whale detection algorithms for following large movements
+- Implemented MEV protection mechanisms
 
 ## Contact
 
