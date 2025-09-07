@@ -13,7 +13,7 @@ use anchor_client::solana_sdk::signature::Signer;
 use solana_vntr_sniper::{
     common::{config::Config, constants::RUN_MSG, cache::WALLET_TOKEN_ACCOUNTS},
     engine::{
-        sniper_bot::{start_target_wallet_monitoring, start_dex_monitoring, SniperConfig},
+        sniper_bot::{start_dex_monitoring, SniperConfig},
         swap::SwapProtocol,
     },
     services::{ 
@@ -550,7 +550,7 @@ async fn main() {
     
     // Selling instruction cache removed - no maintenance needed
 
-    // Initialize and log selling strategy parameters
+    // Initialize and log selling strategy parameters (used by sniper sells)
     let selling_config = solana_vntr_sniper::engine::selling_strategy::SellingConfig::set_from_env();
     let selling_engine = solana_vntr_sniper::engine::selling_strategy::SellingEngine::new(
         Arc::new(config.app_state.clone()),
@@ -559,64 +559,6 @@ async fn main() {
     );
     selling_engine.log_selling_parameters();
 
-    // Initialize copy selling for existing token balances
-    match selling_engine.initialize_copy_selling_for_existing_tokens().await {
-        Ok(count) => {
-            if count > 0 {
-                println!("✅ Copy selling initialized for {} existing tokens", count);
-            }
-        },
-        Err(e) => {
-            eprintln!("⚠️  Failed to initialize copy selling for existing tokens: {}", e);
-        }
-    }
-
-    // Get copy trading target addresses from environment
-    let copy_trading_target_address = std::env::var("COPY_TRADING_TARGET_ADDRESS").ok();
-    let is_multi_copy_trading = std::env::var("IS_MULTI_COPY_TRADING")
-        .ok()
-        .and_then(|v| v.parse::<bool>().ok())
-        .unwrap_or(false);
-    let excluded_addresses_str = std::env::var("EXCLUDED_ADDRESSES").ok();
-    
-    // Prepare target addresses for monitoring
-    let mut target_addresses = Vec::new();
-    let mut excluded_addresses = Vec::new();
-
-    // Handle multiple copy trading targets if enabled
-    if is_multi_copy_trading {
-        if let Some(address_str) = copy_trading_target_address {
-            // Parse comma-separated addresses
-            for addr in address_str.split(',') {
-                let trimmed_addr = addr.trim();
-                if !trimmed_addr.is_empty() {
-                    target_addresses.push(trimmed_addr.to_string());
-                }
-            }
-        }
-    } else if let Some(address) = copy_trading_target_address {
-        // Single address mode
-        if !address.is_empty() {
-            target_addresses.push(address);
-        }
-    }
-    
-    if let Some(excluded_addresses_str) = excluded_addresses_str {
-        for addr in excluded_addresses_str.split(',') {
-            let trimmed_addr = addr.trim();
-            if !trimmed_addr.is_empty() {
-                excluded_addresses.push(trimmed_addr.to_string());
-            }
-        }
-    }
-
-    if target_addresses.is_empty() {
-        eprintln!("No COPY_TRADING_TARGET_ADDRESS specified. Please set this environment variable.");
-        return;
-    }
-    
-
-    
     // Get protocol preference from environment
     let protocol_preference = std::env::var("PROTOCOL_PREFERENCE")
         .ok()
@@ -627,58 +569,21 @@ async fn main() {
         })
         .unwrap_or(SwapProtocol::Auto);
     
-    // Start risk management service
-    println!("Starting risk management service...");
-    if let Err(e) = solana_vntr_sniper::engine::risk_management::start_risk_management_service(
-        target_addresses.clone(),
-        Arc::new(config.app_state.clone()),
-        Arc::new(config.swap_config.clone()),
-    ).await {
-        eprintln!("Failed to start risk management service: {}", e);
-    } else {
-        println!("Risk management service started successfully");
-    }
-
-    // Create copy trading config
+    // Create sniper config (DEX-only monitoring)
     let sniper_config = SniperConfig {
         yellowstone_grpc_http: config.yellowstone_grpc_http.clone(),
         yellowstone_grpc_token: config.yellowstone_grpc_token.clone(),
         app_state: config.app_state.clone(),
         swap_config: config.swap_config.clone(),
         counter_limit: config.counter_limit as u64,
-        target_addresses,
-        excluded_addresses,
         protocol_preference,
     };
     
-    // Run both monitoring functions simultaneously
-    println!("🚀 Starting both monitoring systems simultaneously...");
-    
-    // Spawn both monitoring tasks to run in parallel
-    let target_monitoring_handle = tokio::spawn({
-        let config = sniper_config.clone();
-        async move {
-            match start_target_wallet_monitoring(config).await {
-                Ok(_) => println!("✅ Target wallet monitoring completed successfully"),
-                Err(e) => eprintln!("❌ Target wallet monitoring error: {}", e),
-            }
-        }
-    });
-    
-    let dex_monitoring_handle = tokio::spawn({
-        let config = sniper_config;
-        async move {
-            match start_dex_monitoring(config).await {
-                Ok(_) => println!("✅ DEX monitoring completed successfully"),
-                Err(e) => eprintln!("❌ DEX monitoring error: {}", e),
-            }
-        }
-    });
-    
-    // Wait for both tasks to complete (or error)
-    println!("⏳ Waiting for monitoring tasks to complete...");
-    tokio::try_join!(target_monitoring_handle, dex_monitoring_handle)
-        .map(|_| println!("🎯 Both monitoring systems have completed"))
-        .unwrap_or_else(|_| println!("⚠️  One or both monitoring systems encountered errors"));
+    // Run DEX monitoring only (sniper mode)
+    println!("🚀 Starting DEX monitoring (sniper mode)...");
+    match start_dex_monitoring(sniper_config).await {
+        Ok(_) => println!("✅ DEX monitoring completed successfully"),
+        Err(e) => eprintln!("❌ DEX monitoring error: {}", e),
+    }
 
 }
