@@ -17,9 +17,7 @@ use solana_vntr_sniper::{
         swap::SwapProtocol,
     },
     services::{ 
-        cache_maintenance, 
-        blockhash_processor::BlockhashProcessor,
-        jupiter_api::JupiterClient
+        cache_maintenance
     },
     core::token,
 };
@@ -192,167 +190,6 @@ async fn unwrap_sol(config: &Config) -> Result<(), String> {
     }
 }
 
-/// Sell all tokens using Jupiter API
-async fn sell_all_tokens(config: &Config) -> Result<(), String> {
-    let logger = solana_vntr_sniper::common::logger::Logger::new("[SELL-ALL-TOKENS] => ".green().to_string());
-    let quote_logger = solana_vntr_sniper::common::logger::Logger::new("[JUPITER-QUOTE] => ".blue().to_string());
-    let execute_logger = solana_vntr_sniper::common::logger::Logger::new("[EXECUTE-SWAP] => ".yellow().to_string());
-    let sell_logger = solana_vntr_sniper::common::logger::Logger::new("[SELL-TOKEN] ".cyan().to_string());
-    
-    // Get wallet pubkey
-    let wallet_pubkey = match config.app_state.wallet.try_pubkey() {
-        Ok(pk) => pk,
-        Err(_) => return Err("Failed to get wallet pubkey".to_string()),
-    };
-    
-    logger.log(format!("🔍 Scanning wallet {} for tokens to sell", wallet_pubkey));
-    
-    // Get the token program pubkey
-    let token_program = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
-    
-    // Query all token accounts owned by the wallet
-    let accounts = config.app_state.rpc_client.get_token_accounts_by_owner(
-        &wallet_pubkey,
-        anchor_client::solana_client::rpc_request::TokenAccountsFilter::ProgramId(token_program)
-    ).map_err(|e| format!("Failed to get token accounts: {}", e))?;
-    
-    if accounts.is_empty() {
-        logger.log("No token accounts found".to_string());
-        return Ok(());
-    }
-    
-    logger.log(format!("Found {} token accounts", accounts.len()));
-    
-    // Create Jupiter API client
-    let jupiter_client = JupiterClient::new(config.app_state.rpc_nonblocking_client.clone());
-    
-    // Filter and collect token information
-    let mut tokens_to_sell = Vec::new();
-    let mut total_token_count = 0;
-    let mut sold_count = 0;
-    let mut failed_count = 0;
-    let mut total_sol_received = 0u64;
-    
-    for account_info in accounts {
-        let token_account = Pubkey::from_str(&account_info.pubkey)
-            .map_err(|_| format!("Invalid token account pubkey: {}", account_info.pubkey))?;
-        
-        // Get account data
-        let account_data = match config.app_state.rpc_client.get_account(&token_account) {
-            Ok(data) => data,
-            Err(e) => {
-                logger.log(format!("Failed to get account data for {}: {}", token_account, e).red().to_string());
-                continue;
-            }
-        };
-        
-        // Parse token account data
-        if let Ok(token_data) = spl_token::state::Account::unpack(&account_data.data) {
-            // Skip WSOL (wrapped SOL) and accounts with zero balance
-            if token_data.mint == spl_token::native_mint::id() || token_data.amount == 0 {
-                continue;
-            }
-            
-            total_token_count += 1;
-            
-            // Get mint account to determine decimals
-            let mint_data = match config.app_state.rpc_client.get_account(&token_data.mint) {
-                Ok(data) => data,
-                Err(e) => {
-                    logger.log(format!("Failed to get mint data for {}: {}", token_data.mint, e).yellow().to_string());
-                    continue;
-                }
-            };
-            
-            let mint_info = match spl_token::state::Mint::unpack(&mint_data.data) {
-                Ok(info) => info,
-                Err(e) => {
-                    logger.log(format!("Failed to parse mint data for {}: {}", token_data.mint, e).yellow().to_string());
-                    continue;
-                }
-            };
-            
-            let decimals = mint_info.decimals;
-            let token_amount = token_data.amount as f64 / 10f64.powi(decimals as i32);
-            
-            logger.log(format!("📦 Found token: {} - Amount: {} (decimals: {})", 
-                               token_data.mint, token_amount, decimals));
-            
-            tokens_to_sell.push((token_data.mint.to_string(), token_data.amount, decimals));
-        }
-    }
-    
-    if tokens_to_sell.is_empty() {
-        logger.log("No tokens found to sell (excluding SOL/WSOL)".yellow().to_string());
-        return Ok(());
-    }
-    
-    logger.log(format!("💱 Starting to sell {} tokens", tokens_to_sell.len()));
-    
-    // Sell each token using Jupiter API
-    for (mint, amount, decimals) in tokens_to_sell {
-        logger.log(format!("💱 Selling token: {}", mint).cyan().to_string());
-        
-        // First get the quote to show detailed information
-        let sol_mint = "So11111111111111111111111111111111111111112";
-        quote_logger.log(format!("Getting quote: {} -> {} (amount: {})", mint, sol_mint, amount));
-        
-        match jupiter_client.get_quote(&mint, sol_mint, amount, 100).await {
-            Ok(quote) => {
-                // Log quote details like in the example
-                quote_logger.log(format!("Raw quote response (first 500 chars): {}", 
-                    serde_json::to_string(&quote).unwrap_or_default().chars().take(500).collect::<String>()));
-                
-                quote_logger.log(format!("Quote received: {} {} -> {} {}", 
-                    quote.in_amount, mint, quote.out_amount, sol_mint));
-                
-                // Now get the actual transaction using the enhanced Jupiter sell method
-                match jupiter_client.sell_token_with_jupiter(&mint, amount, 500, &config.app_state.wallet).await {
-                    Ok(signature) => {
-                        execute_logger.log(format!("Jupiter sell transaction sent: {}", signature));
-                        
-                        // Wait a moment for confirmation
-                        tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
-                        execute_logger.log(format!("Jupiter sell transaction confirmed: {}", signature));
-                        
-                        // Log the successful sell
-                        sell_logger.log(format!("{} => Token sold successfully! Signature: {}", mint, signature));
-                        
-                        // Parse the expected SOL amount from quote
-                        if let Ok(sol_amount) = quote.out_amount.parse::<u64>() {
-                            total_sol_received += sol_amount;
-                        }
-                        
-                        logger.log(format!("✅ Successfully sold {}: {}", mint, signature).green().to_string());
-                        sold_count += 1;
-                    },
-                    Err(e) => {
-                        logger.log(format!("❌ Failed to get sell transaction for token {}: {}", mint, e).red().to_string());
-                        failed_count += 1;
-                    }
-                }
-            },
-            Err(e) => {
-                logger.log(format!("❌ Failed to get quote for token {}: {}", mint, e).red().to_string());
-                failed_count += 1;
-            }
-        }
-        
-        // Small delay between transactions to avoid rate limiting
-        tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
-    }
-    
-    // Final summary
-    let sol_received_display = total_sol_received as f64 / 1_000_000_000.0; // Convert lamports to SOL
-    logger.log(format!("Selling completed! ✅ {} successful, ❌ {} failed, ~{:.6} SOL received", 
-                       sold_count, failed_count, sol_received_display).cyan().bold().to_string());
-    
-    if failed_count > 0 {
-        Err(format!("Failed to sell {} out of {} tokens", failed_count, total_token_count))
-    } else {
-        Ok(())
-    }
-}
 
 /// Close all token accounts owned by the wallet
 async fn close_all_token_accounts(config: &Config) -> Result<(), String> {
@@ -461,20 +298,6 @@ async fn main() {
     let run_msg = RUN_MSG;
     println!("{}", run_msg);
     
-    // Initialize blockhash processor
-    match BlockhashProcessor::new(config.app_state.rpc_client.clone()).await {
-        Ok(processor) => {
-            if let Err(e) = processor.start().await {
-                eprintln!("Failed to start blockhash processor: {}", e);
-                return;
-            }
-            println!("Blockhash processor started successfully");
-        },
-        Err(e) => {
-            eprintln!("Failed to initialize blockhash processor: {}", e);
-            return;
-        }
-    }
 
     // Parse command line arguments
     let args: Vec<String> = std::env::args().collect();
@@ -509,19 +332,6 @@ async fn main() {
                 },
                 Err(e) => {
                     eprintln!("Failed to unwrap WSOL: {}", e);
-                    return;
-                }
-            }
-        } else if args.contains(&"--sell".to_string()) {
-            println!("Selling all tokens using Jupiter API...");
-            
-            match sell_all_tokens(&config).await {
-                Ok(_) => {
-                    println!("Successfully sold all tokens");
-                    return;
-                },
-                Err(e) => {
-                    eprintln!("Failed to sell all tokens: {}", e);
                     return;
                 }
             }

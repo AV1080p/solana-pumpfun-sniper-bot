@@ -761,12 +761,12 @@ pub async fn execute_buy(
                     logger.log(format!("Generated PumpFun buy instruction at price: {}", price));
                     logger.log(format!("copy transaction {}", trade_info.signature));
                     let start_time = Instant::now();
-                    // Get real-time blockhash from processor
-                    let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                        Some(hash) => hash,
-                        None => {
-                            logger.log("Failed to get real-time blockhash, skipping transaction".red().to_string());
-                            return Err("Failed to get real-time blockhash".to_string());
+                    // Get recent blockhash from RPC
+                    let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                        Ok(hash) => hash,
+                        Err(e) => {
+                            logger.log(format!("Failed to get recent blockhash: {}, skipping transaction", e).red().to_string());
+                            return Err(format!("Failed to get recent blockhash: {}", e));
                         }
                     };
                     println!("time taken for get_latest_blockhash: {:?}", start_time.elapsed());
@@ -875,12 +875,12 @@ pub async fn execute_buy(
                     logger.log(format!("Generated PumpSwap buy instruction at price: {}", price));
                     logger.log(format!("copy transaction {}", trade_info.signature));
                     
-                    // Get real-time blockhash from processor
-                    let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                        Some(hash) => hash,
-                        None => {
-                            logger.log("Failed to get real-time blockhash, skipping transaction".red().to_string());
-                            return Err("Failed to get real-time blockhash".to_string());
+                    // Get recent blockhash from RPC
+                    let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                        Ok(hash) => hash,
+                        Err(e) => {
+                            logger.log(format!("Failed to get recent blockhash: {}, skipping transaction", e).red().to_string());
+                            return Err(format!("Failed to get recent blockhash: {}", e));
                         }
                     };
 
@@ -981,12 +981,12 @@ pub async fn execute_buy(
             match raydium.build_swap_from_parsed_data(&trade_info, buy_config.clone()).await {
                 Ok((keypair, instructions, _price)) => {
                     
-                    // Get real-time blockhash from processor
-                    let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                        Some(hash) => hash,
-                        None => {
-                            logger.log("Failed to get real-time blockhash, skipping transaction".red().to_string());
-                            return Err("Failed to get real-time blockhash".to_string());
+                    // Get recent blockhash from RPC
+                    let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                        Ok(hash) => hash,
+                        Err(e) => {
+                            logger.log(format!("Failed to get recent blockhash: {}, skipping transaction", e).red().to_string());
+                            return Err(format!("Failed to get recent blockhash: {}", e));
                         }
                     };
                     
@@ -1087,12 +1087,12 @@ pub async fn execute_buy(
                     logger.log(format!("Generated PumpFun buy instruction at price: {}", price));
                     logger.log(format!("copy transaction {}", trade_info.signature));
                     let start_time = Instant::now();
-                    // Get real-time blockhash from processor
-                    let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                        Some(hash) => hash,
-                        None => {
-                            logger.log("Failed to get real-time blockhash, skipping transaction".red().to_string());
-                            return Err("Failed to get real-time blockhash".to_string());
+                    // Get recent blockhash from RPC
+                    let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                        Ok(hash) => hash,
+                        Err(e) => {
+                            logger.log(format!("Failed to get recent blockhash: {}, skipping transaction", e).red().to_string());
+                            return Err(format!("Failed to get recent blockhash: {}", e));
                         }
                     };
                     println!("time taken for get_latest_blockhash: {:?}", start_time.elapsed());
@@ -1388,10 +1388,10 @@ async fn execute_pumpfun_emergency_sell_with_zeroslot(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("🐋 Generated PumpFun whale emergency sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -1439,10 +1439,10 @@ async fn execute_pumpswap_emergency_sell_with_zeroslot(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("🐋 Generated PumpSwap whale emergency sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -1473,62 +1473,6 @@ async fn execute_pumpswap_emergency_sell_with_zeroslot(
     }
 }
 
-/// Execute emergency sell using Jupiter API as fallback
-async fn execute_jupiter_emergency_sell(
-    token_mint: &str,
-    _amount_to_sell: f64,
-    app_state: Arc<AppState>,
-    logger: &Logger,
-) -> Result<(), String> {
-    logger.log(format!("🪐 Attempting Jupiter API emergency sell for {}", token_mint).cyan().to_string());
-    
-    // Create Jupiter client
-    let jupiter_client = crate::services::jupiter_api::JupiterClient::new(app_state.rpc_nonblocking_client.clone());
-    
-    // Get token account address
-    let wallet_pubkey = app_state.wallet.try_pubkey()
-        .map_err(|e| format!("Failed to get wallet pubkey: {}", e))?;
-    
-    let token_pubkey = Pubkey::from_str(token_mint)
-        .map_err(|e| format!("Invalid token mint: {}", e))?;
-    
-    let token_account = get_associated_token_address(&wallet_pubkey, &token_pubkey);
-    
-    // Get actual token balance
-    let token_balance = match app_state.rpc_nonblocking_client.get_token_account(&token_account).await {
-        Ok(Some(account)) => {
-            let amount_value = account.token_amount.amount.parse::<u64>()
-                .map_err(|e| format!("Failed to parse token amount: {}", e))?;
-            amount_value
-        },
-        Ok(None) => {
-            return Err("Token account not found".to_string());
-        },
-        Err(e) => {
-            return Err(format!("Failed to get token balance: {}", e));
-        }
-    };
-    
-    if token_balance == 0 {
-        return Err("No tokens to sell".to_string());
-    }
-    
-    // Execute Jupiter sell with high slippage for emergency
-    match jupiter_client.sell_token_with_jupiter(
-        token_mint,
-        token_balance,
-        2000, // 20% slippage for emergency
-        &app_state.wallet,
-    ).await {
-        Ok(signature) => {
-            logger.log(format!("🪐 Jupiter emergency sell successful: {}", signature).green().to_string());
-            Ok(())
-        },
-        Err(e) => {
-            Err(format!("Jupiter emergency sell failed: {}", e))
-        }
-    }
-}
 
 /// Execute emergency sell with specified method (zeroslot or normal)
 async fn execute_emergency_sell_with_method(
@@ -1589,10 +1533,10 @@ async fn execute_pumpfun_emergency_sell_with_normal(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("🐋 Generated PumpFun emergency sell (normal RPC) at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -1636,10 +1580,10 @@ async fn execute_pumpswap_emergency_sell_with_normal(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("🐋 Generated PumpSwap emergency sell (normal RPC) at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -1683,10 +1627,10 @@ async fn execute_raydium_emergency_sell_with_normal(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("🐋 Generated Raydium emergency sell (normal RPC) at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -1993,10 +1937,10 @@ async fn execute_pumpfun_sell_with_zeroslot(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("Generated PumpFun sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -2044,10 +1988,10 @@ async fn execute_pumpswap_sell_with_zeroslot(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("Generated PumpSwap sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -2095,10 +2039,10 @@ async fn execute_raydium_emergency_sell_with_zeroslot(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("🐋 Generated Raydium whale emergency sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -2146,10 +2090,10 @@ async fn execute_pumpfun_sell_with_normal(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("Generated PumpFun sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -2197,10 +2141,10 @@ async fn execute_pumpswap_sell_with_normal(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("Generated PumpSwap sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -2248,10 +2192,10 @@ async fn execute_raydium_sell_with_zeroslot(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("Generated Raydium sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -2299,10 +2243,10 @@ async fn execute_raydium_sell_with_normal(
         Ok((keypair, instructions, price)) => {
             logger.log(format!("Generated Raydium sell instruction at price: {}", price));
             
-            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                Some(hash) => hash,
-                None => {
-                    return Err("Failed to get recent blockhash".to_string());
+            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
+                Ok(hash) => hash,
+                Err(e) => {
+                    return Err(format!("Failed to get recent blockhash: {}", e));
                 }
             };
             
@@ -2534,7 +2478,7 @@ pub async fn execute_sell(
                             // Execute the transaction
                             match crate::core::tx::new_signed_and_send_zeroslot(
                                 app_state.zeroslot_rpc_client.clone(),
-                                match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
+                                match app_state.rpc_client.get_latest_blockhash() {
                                     Some(hash) => hash,
                                     None => {
                                         logger.log("Failed to get recent blockhash".red().to_string());
@@ -2612,7 +2556,7 @@ pub async fn execute_sell(
                     match pump_swap.build_swap_from_parsed_data(&trade_info_clone, sell_config.clone()).await {
                         Ok((keypair, instructions, price)) => {
                             // Get recent blockhash from the processor
-                            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
+                            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
                                 Some(hash) => hash,
                                 None => {
                                     logger.log("Failed to get recent blockhash".red().to_string());
@@ -2695,7 +2639,7 @@ pub async fn execute_sell(
                     
                     match raydium.build_swap_from_parsed_data(&trade_info_clone, sell_config.clone()).await {
                         Ok((keypair, instructions, price)) => {
-                            let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
+                            let recent_blockhash = match app_state.rpc_client.get_latest_blockhash() {
                                 Some(hash) => hash,
                                 None => {
                                     logger.log("Failed to get recent blockhash".red().to_string());
@@ -2778,7 +2722,7 @@ pub async fn execute_sell(
                             logger.log(format!("Generated PumpFun sell instruction at price: {}", price));
                             match crate::core::tx::new_signed_and_send_zeroslot(
                                 app_state.zeroslot_rpc_client.clone(),
-                                match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
+                                match app_state.rpc_client.get_latest_blockhash() {
                                     Some(hash) => hash,
                                     None => {
                                         logger.log("Failed to get recent blockhash".red().to_string());

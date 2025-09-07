@@ -1885,11 +1885,11 @@ impl SellingEngine {
                 match pump.build_swap_from_parsed_data(&emergency_trade_info, emergency_config).await {
                     Ok((keypair, instructions, price)) => {
                         // Get recent blockhash from the processor
-                        let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                            Some(hash) => hash,
-                            None => {
-                                self.logger.log("Failed to get recent blockhash".red().to_string());
-                                return Err(anyhow!("Failed to get recent blockhash"));
+                        let recent_blockhash = match self.app_state.rpc_client.get_latest_blockhash() {
+                            Ok(hash) => hash,
+                            Err(e) => {
+                                self.logger.log(format!("Failed to get recent blockhash: {}", e).red().to_string());
+                                return Err(anyhow!("Failed to get recent blockhash: {}", e));
                             }
                         };
                         self.logger.log(format!("Generated emergency PumpFun sell instruction at price: {}", price));
@@ -1935,11 +1935,11 @@ impl SellingEngine {
                 match pump_swap.build_swap_from_parsed_data(&emergency_trade_info, emergency_config).await {
                     Ok((keypair, instructions, price)) => {
                         // Get recent blockhash from the processor
-                        let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                            Some(hash) => hash,
-                            None => {
-                                self.logger.log("Failed to get recent blockhash".red().to_string());
-                                return Err(anyhow!("Failed to get recent blockhash"));
+                        let recent_blockhash = match self.app_state.rpc_client.get_latest_blockhash() {
+                            Ok(hash) => hash,
+                            Err(e) => {
+                                self.logger.log(format!("Failed to get recent blockhash: {}", e).red().to_string());
+                                return Err(anyhow!("Failed to get recent blockhash: {}", e));
                             }
                         };
                         self.logger.log(format!("Generated emergency PumpSwap sell instruction at price: {}", price));
@@ -1985,11 +1985,11 @@ impl SellingEngine {
                 match raydium.build_swap_from_parsed_data(&emergency_trade_info, emergency_config).await {
                     Ok((keypair, instructions, price)) => {
                         // Get recent blockhash from the processor
-                        let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                            Some(hash) => hash,
-                            None => {
-                                self.logger.log("Failed to get recent blockhash".red().to_string());
-                                return Err(anyhow!("Failed to get recent blockhash"));
+                        let recent_blockhash = match self.app_state.rpc_client.get_latest_blockhash() {
+                            Ok(hash) => hash,
+                            Err(e) => {
+                                self.logger.log(format!("Failed to get recent blockhash: {}", e).red().to_string());
+                                return Err(anyhow!("Failed to get recent blockhash: {}", e));
                             }
                         };
                         self.logger.log(format!("Generated emergency Raydium sell instruction at price: {}", price));
@@ -2034,11 +2034,11 @@ impl SellingEngine {
                 
                 match pump.build_swap_from_parsed_data(&emergency_trade_info, emergency_config).await {
                     Ok((keypair, instructions, price)) => {
-                        let recent_blockhash = match crate::services::blockhash_processor::BlockhashProcessor::get_latest_blockhash().await {
-                            Some(hash) => hash,
-                            None => {
-                                self.logger.log("Failed to get recent blockhash".red().to_string());
-                                return Err(anyhow!("Failed to get recent blockhash"));
+                        let recent_blockhash = match self.app_state.rpc_client.get_latest_blockhash() {
+                            Ok(hash) => hash,
+                            Err(e) => {
+                                self.logger.log(format!("Failed to get recent blockhash: {}", e).red().to_string());
+                                return Err(anyhow!("Failed to get recent blockhash: {}", e));
                             }
                         };
                         self.logger.log(format!("Generated emergency PumpFun sell instruction at price: {}", price));
@@ -2080,19 +2080,8 @@ impl SellingEngine {
                 Ok(signature)
             },
             Err(dex_error) => {
-                self.logger.log(format!("❌ DEX emergency sell failed: {}. Attempting Jupiter API fallback...", dex_error).yellow().to_string());
-                
-                // Try Jupiter API as fallback
-                match self.try_jupiter_fallback_sell(token_mint, token_amount).await {
-                    Ok(jupiter_signature) => {
-                        self.logger.log(format!("✅ Jupiter API fallback sell successful: {}", jupiter_signature).green().to_string());
-                        Ok(jupiter_signature)
-                    },
-                    Err(jupiter_error) => {
-                        self.logger.log(format!("❌ Jupiter API fallback also failed: {}. All selling methods exhausted.", jupiter_error).red().to_string());
-                        Err(anyhow!("Both DEX and Jupiter selling failed. DEX error: {}. Jupiter error: {}", dex_error, jupiter_error))
-                    }
-                }
+                self.logger.log(format!("❌ DEX emergency sell failed: {}", dex_error).red().to_string());
+                Err(anyhow!("DEX emergency sell failed: {}", dex_error))
             }
         };
 
@@ -2115,62 +2104,6 @@ impl SellingEngine {
         final_result
     }
 
-    /// Try Jupiter API as fallback when DEX selling fails
-    async fn try_jupiter_fallback_sell(&self, token_mint: &str, token_amount: f64) -> Result<String> {
-        self.logger.log(format!("🌌 Attempting Jupiter API fallback sell for {} tokens of {}", token_amount, token_mint).cyan().to_string());
-        
-        // Create Jupiter client
-        let jupiter_client = crate::services::jupiter_api::JupiterClient::new(
-            self.app_state.rpc_nonblocking_client.clone()
-        );
-        
-        // Get token account to get the correct amount in raw units
-        let wallet_pubkey = self.app_state.wallet.try_pubkey()
-            .map_err(|e| anyhow!("Failed to get wallet pubkey: {}", e))?;
-        let token_pubkey = Pubkey::from_str(token_mint)
-            .map_err(|e| anyhow!("Invalid token mint address: {}", e))?;
-        let ata = get_associated_token_address(&wallet_pubkey, &token_pubkey);
-
-        // Get current token balance in raw units for Jupiter
-        let raw_token_amount = match self.app_state.rpc_nonblocking_client.get_token_account(&ata).await {
-            Ok(Some(account)) => {
-                account.token_amount.amount.parse::<u64>()
-                    .map_err(|e| anyhow!("Failed to parse token amount: {}", e))?
-            },
-            Ok(None) => {
-                return Err(anyhow!("No token account found for mint: {}", token_mint));
-            },
-            Err(e) => {
-                return Err(anyhow!("Failed to get token account: {}", e));
-            }
-        };
-
-        if raw_token_amount == 0 {
-            return Err(anyhow!("No tokens to sell"));
-        }
-
-        // Use 500 basis points (5%) slippage for Jupiter emergency sells
-        let slippage_bps = 500;
-        
-        self.logger.log(format!("Jupiter selling {} raw tokens with {}bps slippage", raw_token_amount, slippage_bps).cyan().to_string());
-        
-        // Execute Jupiter sell
-        match jupiter_client.sell_token_with_jupiter(
-            token_mint,
-            raw_token_amount,
-            slippage_bps,
-            &self.app_state.wallet,
-        ).await {
-            Ok(signature) => {
-                self.logger.log(format!("🌌 Jupiter API sell completed: {}", signature).green().to_string());
-                Ok(signature)
-            },
-            Err(e) => {
-                self.logger.log(format!("🌌 Jupiter API sell failed: {}", e).red().to_string());
-                Err(anyhow!("Jupiter API sell failed: {}", e))
-            }
-        }
-    }
 
     pub async fn check_time_conditions(&self, trade_info: &TradeInfoFromToken) -> Option<String> {
         // Get current timestamp
