@@ -310,8 +310,6 @@ pub struct SniperConfig {
     pub app_state: AppState,
     pub swap_config: SwapConfig,
     pub counter_limit: u64,
-    pub target_addresses: Vec<String>,
-    pub excluded_addresses: Vec<String>,
     pub protocol_preference: SwapProtocol,
 }
 
@@ -417,9 +415,6 @@ pub async fn start_target_wallet_monitoring(config: SniperConfig) -> Result<(), 
     // Enable buying
     BUYING_ENABLED.insert((), true);
 
-    // Create config for subscription
-    let target_addresses = config.target_addresses.clone();
-
     // Set up subscription
     let subscription_request = SubscribeRequest {
         transactions: maplit::hashmap! {
@@ -427,8 +422,8 @@ pub async fn start_target_wallet_monitoring(config: SniperConfig) -> Result<(), 
                 vote: Some(false), // Exclude vote transactions
                 failed: Some(false), // Exclude failed transactions
                 signature: None,
-                account_include: target_addresses.clone(), // Only include transactions involving our targets
-                account_exclude: vec![], // Listen to all transactions
+                account_include: dexs.clone(), // Only include transactions involving DEX program IDs
+                account_exclude: vec![],
                 account_required: Vec::<String>::new(),
             }
         },
@@ -3262,12 +3257,39 @@ async fn process_message_for_dex_monitoring(
                 tokio::spawn(async move {
                     if let Some(parsed_data) = crate::engine::transaction_parser::parse_transaction_data(&txn, &data) {
                         if parsed_data.mint != "So11111111111111111111111111111111111111112" {
-                            // Check if this token mint is in our focus token list
-                            if FOCUS_TOKEN_LIST.contains_key(&parsed_data.mint) {
-                                // Process the transaction for this focus token (no extra logs here)
-                                let _ = handle_sniper_bot_logic(parsed_data, config, None, &txn, &logger).await;
+                            // Ensure token is tracked in focus list (sniper-only mode)
+                            if !FOCUS_TOKEN_LIST.contains_key(&parsed_data.mint) {
+                                let protocol = match parsed_data.dex_type {
+                                    transaction_parser::DexType::PumpSwap => SwapProtocol::PumpSwap,
+                                    transaction_parser::DexType::PumpFun => SwapProtocol::PumpFun,
+                                    transaction_parser::DexType::RaydiumLaunchpad => SwapProtocol::RaydiumLaunchpad,
+                                    _ => config.protocol_preference.clone(),
+                                };
+                                let focus_info = FocusTokenInfo {
+                                    mint: parsed_data.mint.clone(),
+                                    initial_price: parsed_data.price as f64,
+                                    current_price: parsed_data.price as f64,
+                                    lowest_price: parsed_data.price as f64,
+                                    highest_price: parsed_data.price as f64,
+                                    price_dropped: false,
+                                    buy_count: 0,
+                                    sell_count: 0,
+                                    trade_cycles: 0,
+                                    protocol,
+                                    added_timestamp: Instant::now(),
+                                    last_price_update: Instant::now(),
+                                    price_history: VecDeque::with_capacity(100),
+                                    slot_price_history: VecDeque::with_capacity(16),
+                                    two_slot_drop_active: false,
+                                    whale_wallets: HashSet::new(),
+                                    total_trades: 0,
+                                };
+                                FOCUS_TOKEN_LIST.insert(parsed_data.mint.clone(), focus_info);
+                                // Start price monitoring for this token
+                                let _ = start_price_monitoring(parsed_data.mint.clone(), config.clone(), &logger).await;
                             }
-                            // No logging for tokens not in focus list
+                            // Process transaction for focus token
+                            let _ = handle_sniper_bot_logic(parsed_data, config, None, &txn, &logger).await;
                         }
                     }
                 });
@@ -3289,89 +3311,11 @@ async fn handle_sniper_bot_logic(
 ) -> Result<(), String> {
     let instruction_type = parsed_data.dex_type.clone();
     
-    // Extract signer from transaction to identify target wallet
-    if let Some(ref target_signature) = target_signature {
-        // Extract the actual signer from the transaction
-        if let Some(signer) = extract_signer_from_transaction(txn) {
-            // Check if this transaction is from one of our target wallets
-            if config.target_addresses.iter().any(|target| target == &signer) {
-                logger.log(format!(
-                    "🎯 Target wallet {} {} token {} for {} SOL",
-                    signer,
-                    if parsed_data.is_buy { "buying" } else { "selling" },
-                    parsed_data.mint,
-                    parsed_data.sol_change.abs()
-                ).purple().bold().to_string());
-                
-                // Handle buy transactions from target wallets
-                if parsed_data.is_buy {
-                    return handle_target_wallet_buy(parsed_data, config, logger, signer).await;
-                } else {
-                    // Handle sell transactions from target wallets
-                    return handle_target_wallet_sell(parsed_data, config, logger).await;
-                }
-            }
-        }
-    }
-    
-    // Handle other transactions (non-target wallets) - check if token is in focus list for volume-based buying
+    // Sniper-only: evaluate volume/price-drop based conditions for all tokens
     handle_volume_based_buying(parsed_data, config, logger).await
 }
 
-/// SNIPER BOT: Handle buy transactions from target wallets
-async fn handle_target_wallet_buy(
-    parsed_data: transaction_parser::TradeInfoFromToken,
-    config: Arc<SniperConfig>,
-    logger: &Logger,
-    whale_wallet: String,
-) -> Result<(), String> {
-    let mint = parsed_data.mint.clone();
-    
-    // Determine protocol based on instruction type
-    let protocol = match parsed_data.dex_type {
-        transaction_parser::DexType::PumpSwap => SwapProtocol::PumpSwap,
-        transaction_parser::DexType::PumpFun => SwapProtocol::PumpFun,
-        transaction_parser::DexType::RaydiumLaunchpad => SwapProtocol::RaydiumLaunchpad,
-        _ => config.protocol_preference.clone(),
-    };
-    
-    // Check if token already exists in focus list
-    if let Some(mut focus_info) = FOCUS_TOKEN_LIST.get_mut(&mint) {
-        // Add whale wallet to existing token
-        focus_info.whale_wallets.insert(whale_wallet.clone());
-    } else {
-        // Create new focus token entry
-        let mut whale_wallets = HashSet::new();
-        whale_wallets.insert(whale_wallet.clone());
-        
-        let focus_info = FocusTokenInfo {
-            mint: mint.clone(),
-            initial_price: parsed_data.price as f64,
-            current_price: parsed_data.price as f64,
-            lowest_price: parsed_data.price as f64,
-            highest_price: parsed_data.price as f64,
-            price_dropped: false,
-            buy_count: 0,
-            sell_count: 0,
-            trade_cycles: 0,
-            protocol,
-            added_timestamp: Instant::now(),
-            last_price_update: Instant::now(),
-            price_history: VecDeque::with_capacity(100),
-            slot_price_history: VecDeque::with_capacity(16),
-            two_slot_drop_active: false,
-            whale_wallets,
-            total_trades: 0,
-        };
-        
-        FOCUS_TOKEN_LIST.insert(mint.clone(), focus_info);
-        
-        // Start price monitoring for this token
-        start_price_monitoring(mint.clone(), config.clone(), logger).await?;
-    }
-    
-    Ok(())
-}
+// Removed target-wallet-specific buy handling in sniper-only mode
 
 /// SNIPER BOT: Check and increment trade count, remove token if limit reached
 fn check_and_increment_trade_count(mint: &str, logger: &Logger) -> bool {
@@ -3395,70 +3339,7 @@ fn check_and_increment_trade_count(mint: &str, logger: &Logger) -> bool {
     }
 }
 
-/// SNIPER BOT: Handle sell transactions from target wallets
-async fn handle_target_wallet_sell(
-    parsed_data: transaction_parser::TradeInfoFromToken,
-    config: Arc<SniperConfig>,
-    logger: &Logger,
-) -> Result<(), String> {
-    let mint = parsed_data.mint.clone();
-    
-    // Check if we own this token and execute emergency sell
-    if let Some(_token_info) = BOUGHT_TOKEN_LIST.get(&mint) {
-        // Execute emergency sell (reuse existing logic)
-        let app_state_clone = config.app_state.clone();
-        let logger_clone = logger.clone();
-        let mint_clone = mint.clone();
-        
-        tokio::spawn(async move {
-            let config = crate::common::config::Config::get().await;
-            let selling_config = crate::engine::selling_strategy::SellingConfig::set_from_env();
-            let selling_engine = crate::engine::selling_strategy::SellingEngine::new(
-                app_state_clone.clone().into(),
-                Arc::new(config.swap_config.clone()),
-                selling_config,
-            );
-            drop(config);
-            
-            match selling_engine.unified_emergency_sell(&mint_clone, false, None, None).await {
-                Ok(signature) => {
-                    // Update focus token sell count and check trade limit
-                    if let Some(mut focus_info) = FOCUS_TOKEN_LIST.get_mut(&mint_clone) {
-                        focus_info.sell_count += 1;
-                        focus_info.trade_cycles += 1;
-                        
-                        // Check trade count limit
-                        if !check_and_increment_trade_count(&mint_clone, &logger_clone) {
-                            logger_clone.log(format!("🚫 Token {} removed due to trade limit after sell", mint_clone).red().to_string());
-                        } else if focus_info.trade_cycles >= 3 {
-                            drop(focus_info);
-                            FOCUS_TOKEN_LIST.remove(&mint_clone);
-                            
-                            // Cancel price monitoring
-                            if let Some((_removed_key, cancel_token)) = PRICE_MONITORING_TASKS.remove(&mint_clone) {
-                                cancel_token.cancel();
-                            }
-                        }
-                    }
-                    
-                    // Remove from bought tokens list
-                    BOUGHT_TOKEN_LIST.remove(&mint_clone);
-                    TOKEN_TRACKING.remove(&mint_clone);
-                    
-                    // Cancel regular monitoring
-                    if let Err(e) = cancel_token_monitoring(&mint_clone, &logger_clone).await {
-                        logger_clone.log(format!("Failed to cancel monitoring for token {}: {}", mint_clone, e).yellow().to_string());
-                    }
-                },
-                Err(e) => {
-                    logger_clone.log(format!("❌ Emergency sell failed: {}", e).red().to_string());
-                }
-            }
-        });
-    }
-    
-    Ok(())
-}
+// Removed target-wallet-specific sell handling in sniper-only mode
 
 /// SNIPER BOT: Handle volume-based buying decisions
 async fn handle_volume_based_buying(

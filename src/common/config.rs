@@ -50,7 +50,6 @@ pub struct Config {
     pub swap_config: SwapConfig,
     pub counter_limit: u32,
     pub transaction_landing_mode: TransactionLandingMode,
-    pub copy_selling_limit: f64, // Add this field
     pub selling_unit_price: u64,  // New: Priority fee for selling transactions
     pub selling_unit_limit: u32,  // New: Compute units for selling transactions
     pub zero_slot_tip_value: f64, // New: Tip value for zeroslot selling
@@ -77,9 +76,6 @@ impl Config {
             let transaction_landing_mode = import_env_var("TRANSACTION_LANDING_SERVICE")
                 .parse::<TransactionLandingMode>()
                 .unwrap_or(TransactionLandingMode::default());
-            // Read COPY_SELLING_LIMIT from env (default 1.5)
-            let copy_selling_limit = import_env_var("COPY_SELLING_LIMIT").parse::<f64>().unwrap_or(1.5);
-            
             // Read selling configuration for front-running
             let selling_unit_price = import_env_var("SELLING_UNIT_PRICE").parse::<u64>().unwrap_or(4000000);
             let selling_unit_limit = import_env_var("SELLING_UNIT_LIMIT").parse::<u32>().unwrap_or(2000000);
@@ -156,7 +152,6 @@ impl Config {
                 swap_config,
                 counter_limit,
                 transaction_landing_mode,
-                copy_selling_limit, // Set the field
                 selling_unit_price,
                 selling_unit_limit,
                 zero_slot_tip_value,
