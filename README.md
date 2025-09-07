@@ -3,7 +3,8 @@
 This is a high-performance Rust-based copy trading bot that monitors and replicates trading activity on Solana DEXs like PumpFun and PumpSwap. The bot uses advanced transaction monitoring to detect and copy trades in real-time, giving you an edge in the market.
 
 The bot specifically tracks `buy` and `create` transactions on PumpFun, as well as token migrations from PumpFun to Raydium when the `initialize2` instruction is involved and the migration pubkey (`39azUYFWPz3VHgKCf3VChUwbpURdCHRxjWVowf5jUJjg`) is present.
-# Features:
+
+## Features:
 
 - **Real-time Transaction Monitoring** - Uses Yellowstone gRPC to monitor transactions with minimal latency and high reliability
 - **Multi-Protocol Support** - Compatible with both PumpFun and PumpSwap DEX platforms for maximum trading opportunities
@@ -13,6 +14,10 @@ The bot specifically tracks `buy` and `create` transactions on PumpFun, as well 
 - **Built-in Selling Strategy** - Intelligent profit-taking mechanisms with customizable exit conditions
 - **Performance Optimization** - Efficient async processing with tokio for high-throughput transaction handling
 - **Reliable Error Recovery** - Automatic reconnection and retry mechanisms for uninterrupted operation
+- **Token Account Management** - Automatic token account creation and management for seamless trading
+- **WSOL Wrapping/Unwrapping** - Built-in SOL to WSOL conversion utilities for trading operations
+- **Cache System** - Intelligent caching for improved performance and reduced RPC calls
+- **Transaction Retry Logic** - Robust retry mechanisms for failed transactions
 
 # Who is it for?
 
@@ -60,10 +65,11 @@ A high-performance Rust-based application that monitors transactions from specif
 
 The codebase is organized into several modules:
 
-- **engine/** - Core trading logic including copy trading, selling strategies, and transaction parsing
-- **dex/** - Protocol-specific implementations for PumpFun and PumpSwap
-- **common/** - Shared utilities, configuration, and constants
-- **core/** - Core system functionality
+- **engine/** - Core trading logic including copy trading, selling strategies, transaction parsing, and retry mechanisms
+- **dex/** - Protocol-specific implementations for PumpFun, PumpSwap, and Raydium
+- **common/** - Shared utilities, configuration, constants, caching, and logging
+- **core/** - Core system functionality for tokens and transactions
+- **services/** - External service integrations (RPC clients, cache maintenance, Zeroslot)
 - **error/** - Error handling and definitions
 
 ## Setup
@@ -98,6 +104,16 @@ cargo build --release
 
 # Run the bot
 cargo run --release
+
+# Additional commands:
+# Wrap SOL to WSOL
+cargo run --release -- --wrap
+
+# Unwrap WSOL to SOL
+cargo run --release -- --unwrap
+
+# Close all token accounts
+cargo run --release -- --close
 ```
 
 Once started, the bot will:
@@ -106,6 +122,7 @@ Once started, the bot will:
 2. Monitor transactions from the specified wallet address(es)
 3. Automatically copy buy and sell transactions as they occur
 4. Send notifications via Telegram for detected transactions and executed trades
+5. Manage token accounts and WSOL conversions automatically
 
 ## Recent Updates
 
@@ -113,6 +130,11 @@ Once started, the bot will:
 - Implemented concurrent transaction processing using tokio tasks
 - Enhanced error handling and reporting
 - Improved selling strategy implementation
+- Added WSOL wrapping/unwrapping utilities
+- Implemented token account management and cleanup
+- Added cache system for improved performance
+- Enhanced transaction retry logic for better reliability
+- Streamlined codebase by removing external API dependencies
 
 ## Contact
 
