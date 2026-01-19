@@ -1,27 +1,63 @@
-buy-grpc
-.env
-target
-blacklist.txt
-# Rust build artifacts
-/target
-**/*.rs.bk
-source
-Cargo.lock
-solana-rpc-client-2.1.14
-# IDE files
-.idea/
-.vscode/
-*.iml
-backend
-# Environment files
-.env
-.env.*
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
 
-# Transaction records
-/record/
-/record/pumpfun/
-/record/pumpswap/
-/record/raydium/
+# Environment variables
+.env
+.env.local
+.env*.local
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+frontend/.vercel
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+backend/__pycache__/
+backend/*.egg-info/
+backend/dist/
+backend/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
 
 # Logs
-*.log 
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# AWS
+.aws/
+*.pem
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Testing
+coverage/
+.nyc_output/
+

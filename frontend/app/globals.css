@@ -1,0 +1,115 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50 text-gray-900 antialiased;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+  
+  .glass {
+    @apply bg-white/80 backdrop-blur-lg border border-white/20;
+  }
+  
+  .glass-dark {
+    @apply bg-gray-900/80 backdrop-blur-lg border border-gray-700/20;
+  }
+  
+  .gradient-text {
+    @apply bg-gradient-to-r from-primary-600 via-purple-600 to-pink-600 bg-clip-text text-transparent;
+  }
+  
+  .animate-float {
+    animation: float 6s ease-in-out infinite;
+  }
+  
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-in;
+  }
+  
+  .animate-slide-up {
+    animation: slideUp 0.5s ease-out;
+  }
+}
+
+@keyframes float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-20px);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-primary-400 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-primary-500;
+}
+
+/* Wallet Adapter Button Styling */
+.wallet-adapter-button {
+  @apply !bg-gradient-to-r !from-primary-600 !to-purple-600 !rounded-xl !font-semibold !shadow-lg hover:!shadow-glow !transition-all !border-0 !h-auto !py-3 !px-6;
+}
+
+.wallet-adapter-button:hover {
+  @apply !from-primary-700 !to-purple-700 !scale-105;
+}
+
+.wallet-adapter-button:not([disabled]):hover {
+  @apply !from-primary-700 !to-purple-700;
+}
+
+.wallet-adapter-button-trigger {
+  @apply [&>button]:!bg-gradient-to-r [&>button]:!from-primary-600 [&>button]:!to-purple-600 [&>button]:!rounded-xl [&>button]:!font-semibold [&>button]:!shadow-lg hover:[&>button]:!shadow-glow [&>button]:!transition-all [&>button]:!border-0;
+}
+
+/* Toast Notification Styling */
+.react-hot-toast {
+  @apply !rounded-xl !shadow-xl !backdrop-blur-sm;
+}
+
+.react-hot-toast > div {
+  @apply !rounded-xl;
+}
+

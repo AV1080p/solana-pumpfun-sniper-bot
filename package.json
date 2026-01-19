@@ -1,0 +1,16 @@
+{
+  "name": "tourist-app",
+  "version": "1.0.0",
+  "description": "Tourist app with crypto and debit card payments, Solana DEX integration",
+  "scripts": {
+    "dev": "cd frontend && npm run dev",
+    "build": "cd frontend && npm run build",
+    "start": "cd frontend && npm start",
+    "backend": "cd backend && uvicorn main:app --reload",
+    "install-all": "cd frontend && npm install && cd ../backend && pip install -r requirements.txt"
+  },
+  "keywords": ["tourist", "crypto", "solana", "dex", "nextjs", "python"],
+  "author": "",
+  "license": "MIT"
+}
+
