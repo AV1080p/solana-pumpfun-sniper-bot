@@ -20,7 +20,8 @@ from sqlalchemy import text, inspect
 from sqlalchemy.exc import SQLAlchemyError
 
 from database import engine, SessionLocal, check_database_connection, get_database_info
-from models import Base, Tour, Booking, Payment
+from models import Base, Tour, Booking, Payment, BackupRecord
+from services.encryption_service import get_encryption_service
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +122,7 @@ class DatabaseManager:
                 "message": f"Failed to get table stats: {str(e)}"
             }
 
-    def backup_database(self, backup_name: Optional[str] = None) -> Dict[str, any]:
+    def backup_database(self, backup_name: Optional[str] = None, encrypt: bool = True) -> Dict[str, any]:
         """
         Backup PostgreSQL database using pg_dump.
         
@@ -183,13 +184,56 @@ class DatabaseManager:
             
             if result.returncode == 0:
                 file_size = backup_path.stat().st_size
+                
+                # Encrypt backup if requested
+                encrypted_path = backup_path
+                if encrypt:
+                    encryption_service = get_encryption_service()
+                    try:
+                        # Read backup file
+                        with open(backup_path, 'rb') as f:
+                            backup_data = f.read()
+                        
+                        # Encrypt the backup (using bytes encryption)
+                        encrypted_data = encryption_service.encrypt_bytes(backup_data)
+                        
+                        # Write encrypted backup
+                        encrypted_path = backup_path.with_suffix('.encrypted')
+                        with open(encrypted_path, 'w') as f:
+                            f.write(encrypted_data)
+                        
+                        # Remove unencrypted backup
+                        backup_path.unlink()
+                        backup_path = encrypted_path
+                        file_size = encrypted_path.stat().st_size
+                    except Exception as e:
+                        logger.warning(f"Failed to encrypt backup: {e}. Keeping unencrypted backup.")
+                        encrypt = False
+                
+                # Record backup in database
+                try:
+                    with SessionLocal() as db:
+                        backup_record = BackupRecord(
+                            backup_name=backup_name,
+                            backup_path=str(backup_path),
+                            file_size=file_size,
+                            encrypted=encrypt,
+                            backup_type="full",
+                            status="completed"
+                        )
+                        db.add(backup_record)
+                        db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to record backup in database: {e}")
+                
                 return {
                     "success": True,
                     "message": "Database backup created successfully",
                     "backup_path": str(backup_path),
                     "backup_name": backup_name,
                     "file_size": file_size,
-                    "file_size_mb": round(file_size / (1024 * 1024), 2)
+                    "file_size_mb": round(file_size / (1024 * 1024), 2),
+                    "encrypted": encrypt
                 }
             else:
                 return {
@@ -209,7 +253,7 @@ class DatabaseManager:
                 "message": f"Backup failed: {str(e)}"
             }
 
-    def restore_database(self, backup_path: str, drop_existing: bool = False) -> Dict[str, any]:
+    def restore_database(self, backup_path: str, drop_existing: bool = False, encrypted: bool = False) -> Dict[str, any]:
         """
         Restore PostgreSQL database from backup.
         
@@ -246,6 +290,28 @@ class DatabaseManager:
                     "message": f"Backup file not found: {backup_path}"
                 }
             
+            # Decrypt backup if encrypted
+            restore_file = backup_file
+            if encrypted:
+                encryption_service = get_encryption_service()
+                try:
+                    # Read encrypted backup
+                    with open(backup_file, 'r') as f:
+                        encrypted_data = f.read()
+                    
+                    # Decrypt the backup (using bytes decryption)
+                    decrypted_data = encryption_service.decrypt_bytes(encrypted_data)
+                    
+                    # Write decrypted backup to temp file
+                    restore_file = backup_file.with_suffix('.decrypted')
+                    with open(restore_file, 'wb') as f:
+                        f.write(decrypted_data)
+                except Exception as e:
+                    return {
+                        "success": False,
+                        "message": f"Failed to decrypt backup: {str(e)}"
+                    }
+            
             # Set PGPASSWORD environment variable
             env = os.environ.copy()
             if db_password:
@@ -259,7 +325,7 @@ class DatabaseManager:
                 "-U", db_user,
                 "-d", db_name,
                 "-c" if drop_existing else "",
-                str(backup_file)
+                str(restore_file)
             ]
             cmd = [c for c in cmd if c]  # Remove empty strings
             
@@ -271,6 +337,10 @@ class DatabaseManager:
             )
             
             if result.returncode == 0:
+                # Clean up decrypted temp file if it was created
+                if encrypted and restore_file != backup_file and restore_file.exists():
+                    restore_file.unlink()
+                
                 return {
                     "success": True,
                     "message": "Database restored successfully",

@@ -210,3 +210,96 @@ class FeedbackCreateSchema(BaseModel):
     message: str
     rating: Optional[int] = None
 
+# ========== SECURITY & COMPLIANCE SCHEMAS ==========
+
+class DataExportRequest(BaseModel):
+    format: Optional[str] = "json"  # json, csv
+    user_id: int
+
+class DataDeletionRequest(BaseModel):
+    user_id: int
+    anonymize: Optional[bool] = True  # If True, anonymize instead of delete
+
+class ConsentUpdateRequest(BaseModel):
+    consent_type: str  # data_processing, marketing, analytics, third_party_sharing
+    granted: bool
+
+class RetentionPolicyRequest(BaseModel):
+    data_type: str  # booking, payment, invoice, feedback, user
+    retention_days: int
+    action: Optional[str] = "anonymize"  # delete, anonymize
+
+class RetentionApplyRequest(BaseModel):
+    data_type: Optional[str] = None  # If None, apply all policies
+    dry_run: Optional[bool] = False
+
+class BackupRequest(BaseModel):
+    backup_name: Optional[str] = None
+    encrypt: Optional[bool] = True
+
+class RestoreRequest(BaseModel):
+    backup_path: str
+    drop_existing: Optional[bool] = False
+    encrypted: Optional[bool] = False
+
+# ========== MFA SCHEMAS ==========
+
+class MFASetupRequest(BaseModel):
+    device_name: str
+
+class MFAVerifyRequest(BaseModel):
+    code: str
+
+class MFADisableRequest(BaseModel):
+    password: str
+
+class BackupCodeVerifyRequest(BaseModel):
+    code: str
+
+# ========== SESSION SCHEMAS ==========
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+class SessionRevokeRequest(BaseModel):
+    session_id: Optional[int] = None
+    session_token: Optional[str] = None
+
+# ========== INVITATION SCHEMAS ==========
+
+class InvitationCreateRequest(BaseModel):
+    email: EmailStr
+    role: Optional[str] = "user"
+    metadata: Optional[dict] = None
+
+class InvitationAcceptRequest(BaseModel):
+    token: str
+    password: str
+    full_name: Optional[str] = None
+    username: Optional[str] = None
+
+# ========== SAML/OIDC SCHEMAS ==========
+
+class SAMLInitiateRequest(BaseModel):
+    provider_id: int
+
+class OIDCInitiateRequest(BaseModel):
+    provider_id: int
+    state: Optional[str] = None
+
+# ========== RBAC SCHEMAS ==========
+
+class PermissionGrantRequest(BaseModel):
+    user_id: int
+    permission: str
+
+class PermissionRevokeRequest(BaseModel):
+    user_id: int
+    permission: str
+
+class PermissionCreateRequest(BaseModel):
+    name: str
+    resource: str
+    action: str
+    description: Optional[str] = None
+

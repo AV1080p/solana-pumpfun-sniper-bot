@@ -1,14 +1,17 @@
 from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from fastapi import Query
 import os
+import logging
 from dotenv import load_dotenv
 
+logger = logging.getLogger(__name__)
+
 from database import SessionLocal, engine, Base
-from models import Tour, Booking, Payment, User, Invoice, Feedback
+from models import Tour, Booking, Payment, User, Invoice, Feedback, DataConsent, DataRetentionLog, BackupRecord
 from schemas import (
     TourSchema, BookingSchema, PaymentSchema, PaymentRequest,
     PaymentIntentRequest, PaymentIntentResponse, CryptoPaymentRequest,
@@ -17,14 +20,30 @@ from schemas import (
     UserRegisterSchema, UserLoginSchema, UserSchema, TokenResponse,
     OAuthTokenRequest, OAuthCallbackRequest,
     AccountSettingsUpdateSchema, PasswordUpdateSchema, InvoiceSchema,
-    UsageAnalyticsSchema, FeedbackSchema, FeedbackCreateSchema
+    UsageAnalyticsSchema, FeedbackSchema, FeedbackCreateSchema,
+    DataExportRequest, DataDeletionRequest, ConsentUpdateRequest,
+    RetentionPolicyRequest, RetentionApplyRequest, BackupRequest, RestoreRequest,
+    MFASetupRequest, MFAVerifyRequest, MFADisableRequest, BackupCodeVerifyRequest,
+    RefreshTokenRequest, SessionRevokeRequest,
+    InvitationCreateRequest, InvitationAcceptRequest,
+    SAMLInitiateRequest, OIDCInitiateRequest,
+    PermissionGrantRequest, PermissionRevokeRequest, PermissionCreateRequest
 )
 from services.payment_service import PaymentService
 from services.solana_service import SolanaService
 from services.crypto_service import CryptoService
 from services.auth_service import AuthService
+from services.compliance_service import ComplianceService
+from services.retention_service import RetentionService, RetentionPolicy
+from services.encryption_service import get_encryption_service
+from services.mfa_service import MFAService
+from services.session_service import SessionService
+from services.invitation_service import InvitationService
+from services.saml_service import SAMLService
+from services.oidc_service import OIDCService
+from services.rbac_service import RBACService
 from auth import get_current_user, get_current_active_user, get_current_admin_user, get_optional_user
-from models import User
+from models import User, UserRole
 
 load_dotenv()
 
@@ -73,19 +92,101 @@ async def register(
     )
     return result
 
-@app.post("/auth/login", response_model=TokenResponse)
+@app.post("/auth/login")
 async def login(
     credentials: UserLoginSchema,
+    request: Request,
     db: Session = Depends(get_db)
 ):
-    """Login with email/password"""
+    """Login with email/password (with session management and MFA support)"""
     auth_service = AuthService()
-    result = await auth_service.login_user(
+    user_result = await auth_service.login_user(
         email=credentials.email,
         password=credentials.password,
         db=db
     )
-    return result
+    
+    # Get user from database
+    user = db.query(User).filter(User.email == credentials.email).first()
+    
+    # Check if MFA is enabled
+    if user and user.mfa_enabled:
+        # Return partial success - MFA verification required
+        return {
+            "success": True,
+            "mfa_required": True,
+            "message": "MFA verification required",
+            "user_id": user.id
+        }
+    
+    # Create session
+    session_service = SessionService()
+    device_info = request.headers.get("User-Agent", "Unknown")
+    ip_address = request.client.host if request.client else None
+    
+    session_result = await session_service.create_session(
+        user=user,
+        device_info=device_info,
+        ip_address=ip_address,
+        user_agent=request.headers.get("User-Agent"),
+        db=db
+    )
+    
+    return {
+        "success": True,
+        "access_token": session_result["access_token"],
+        "refresh_token": session_result["refresh_token"],
+        "token_type": "bearer",
+        "user": user_result["user"],
+        "expires_at": session_result["expires_at"]
+    }
+
+@app.post("/auth/login/mfa-verify")
+async def login_mfa_verify(
+    request_data: MFAVerifyRequest,
+    user_id: int = Query(...),
+    request: Request = None,
+    db: Session = Depends(get_db)
+):
+    """Verify MFA code after initial login"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    mfa_service = MFAService()
+    is_valid = await mfa_service.verify_mfa(user, request_data.code)
+    
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid MFA code")
+    
+    # Create session after MFA verification
+    session_service = SessionService()
+    device_info = request.headers.get("User-Agent", "Unknown") if request else "Unknown"
+    ip_address = request.client.host if request and request.client else None
+    
+    session_result = await session_service.create_session(
+        user=user,
+        device_info=device_info,
+        ip_address=ip_address,
+        user_agent=request.headers.get("User-Agent") if request else None,
+        db=db
+    )
+    
+    return {
+        "success": True,
+        "access_token": session_result["access_token"],
+        "refresh_token": session_result["refresh_token"],
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role.value,
+            "avatar_url": user.avatar_url
+        },
+        "expires_at": session_result["expires_at"]
+    }
 
 @app.post("/auth/oauth/token", response_model=TokenResponse)
 async def oauth_token_verify(
@@ -158,6 +259,317 @@ async def refresh_token(
         "access_token": access_token,
         "token_type": "bearer"
     }
+
+# ========== MFA ENDPOINTS ==========
+
+@app.post("/auth/mfa/setup")
+async def setup_mfa(
+    request: MFASetupRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Setup MFA (TOTP) for user"""
+    mfa_service = MFAService()
+    result = await mfa_service.setup_totp(current_user, request.device_name, db)
+    return result
+
+@app.post("/auth/mfa/verify-enable")
+async def verify_and_enable_mfa(
+    request: MFAVerifyRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Verify TOTP code and enable MFA"""
+    mfa_service = MFAService()
+    result = await mfa_service.verify_and_enable_totp(current_user, request.code, db)
+    return result
+
+@app.post("/auth/mfa/verify")
+async def verify_mfa(
+    request: MFAVerifyRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Verify MFA code during login"""
+    mfa_service = MFAService()
+    is_valid = await mfa_service.verify_mfa(current_user, request.code)
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid MFA code")
+    return {"success": True, "message": "MFA verified"}
+
+@app.post("/auth/mfa/disable")
+async def disable_mfa(
+    request: MFADisableRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Disable MFA for user"""
+    mfa_service = MFAService()
+    result = await mfa_service.disable_mfa(current_user, request.password, db)
+    return result
+
+@app.post("/auth/mfa/regenerate-backup-codes")
+async def regenerate_backup_codes(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Regenerate backup codes"""
+    mfa_service = MFAService()
+    result = await mfa_service.regenerate_backup_codes(current_user, db)
+    return result
+
+@app.get("/auth/mfa/devices")
+async def get_mfa_devices(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all MFA devices for user"""
+    mfa_service = MFAService()
+    devices = await mfa_service.get_mfa_devices(current_user, db)
+    return {"success": True, "devices": devices}
+
+# ========== SESSION MANAGEMENT ENDPOINTS ==========
+
+@app.post("/auth/sessions/refresh")
+async def refresh_session_token(
+    request: RefreshTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """Refresh access token using refresh token"""
+    session_service = SessionService()
+    result = await session_service.refresh_session(request.refresh_token, db)
+    return result
+
+@app.get("/auth/sessions")
+async def get_user_sessions(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all sessions for current user"""
+    session_service = SessionService()
+    sessions = await session_service.get_user_sessions(current_user, db)
+    return {"success": True, "sessions": sessions}
+
+@app.post("/auth/sessions/revoke")
+async def revoke_session(
+    request: SessionRevokeRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Revoke a session"""
+    session_service = SessionService()
+    result = await session_service.revoke_session(
+        session_id=request.session_id,
+        session_token=request.session_token,
+        user=current_user,
+        db=db
+    )
+    return result
+
+@app.post("/auth/sessions/revoke-all")
+async def revoke_all_sessions(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Revoke all sessions for current user"""
+    session_service = SessionService()
+    result = await session_service.revoke_all_sessions(current_user, db)
+    return result
+
+# ========== INVITATION ENDPOINTS ==========
+
+@app.post("/auth/invitations")
+async def create_invitation(
+    request: InvitationCreateRequest,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new user invitation (Admin only)"""
+    invitation_service = InvitationService()
+    role = UserRole[request.role.upper()] if request.role else UserRole.USER
+    result = await invitation_service.create_invitation(
+        email=request.email,
+        invited_by=current_user,
+        role=role,
+        metadata=request.metadata,
+        db=db
+    )
+    return result
+
+@app.get("/auth/invitations")
+async def list_invitations(
+    current_user: User = Depends(get_current_active_user),
+    status: Optional[str] = Query(None),
+    db: Session = Depends(get_db)
+):
+    """List invitations"""
+    from models import InvitationStatus
+    invitation_service = InvitationService()
+    status_filter = InvitationStatus[status.upper()] if status else None
+    invitations = await invitation_service.list_invitations(
+        user=current_user,
+        status_filter=status_filter,
+        db=db
+    )
+    return {"success": True, "invitations": invitations}
+
+@app.post("/auth/invitations/accept")
+async def accept_invitation(
+    request: InvitationAcceptRequest,
+    db: Session = Depends(get_db)
+):
+    """Accept an invitation and create account"""
+    invitation_service = InvitationService()
+    result = await invitation_service.accept_invitation(
+        token=request.token,
+        password=request.password,
+        full_name=request.full_name,
+        username=request.username,
+        db=db
+    )
+    return result
+
+@app.post("/auth/invitations/{invitation_id}/cancel")
+async def cancel_invitation(
+    invitation_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Cancel an invitation"""
+    invitation_service = InvitationService()
+    result = await invitation_service.cancel_invitation(invitation_id, current_user, db)
+    return result
+
+@app.post("/auth/invitations/{invitation_id}/resend")
+async def resend_invitation(
+    invitation_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Resend an invitation"""
+    invitation_service = InvitationService()
+    result = await invitation_service.resend_invitation(invitation_id, current_user, db)
+    return result
+
+# ========== SAML/OIDC ENDPOINTS ==========
+
+@app.post("/auth/saml/initiate")
+async def initiate_saml_sso(
+    request: SAMLInitiateRequest,
+    db: Session = Depends(get_db)
+):
+    """Initiate SAML SSO"""
+    saml_service = SAMLService()
+    result = await saml_service.initiate_sso(request.provider_id, db)
+    return result
+
+@app.get("/auth/saml/metadata/{provider_id}")
+async def get_saml_metadata(
+    provider_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get SAML metadata"""
+    saml_service = SAMLService()
+    metadata = await saml_service.get_metadata(provider_id, db)
+    return Response(content=metadata, media_type="application/xml")
+
+@app.post("/auth/oidc/initiate")
+async def initiate_oidc_sso(
+    request: OIDCInitiateRequest,
+    db: Session = Depends(get_db)
+):
+    """Initiate OIDC SSO"""
+    oidc_service = OIDCService()
+    result = await oidc_service.get_authorization_url(
+        request.provider_id,
+        db,
+        state=request.state
+    )
+    return result
+
+@app.get("/auth/oidc/{provider_id}/callback")
+async def oidc_callback(
+    provider_id: int,
+    code: str,
+    state: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Handle OIDC callback"""
+    from fastapi.responses import RedirectResponse
+    
+    oidc_service = OIDCService()
+    result = await oidc_service.handle_callback(provider_id, code, state, db)
+    
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    redirect_url = f"{frontend_url}/auth/callback?token={result['access_token']}&success=true"
+    return RedirectResponse(url=redirect_url)
+
+# ========== RBAC ENDPOINTS ==========
+
+@app.get("/auth/permissions")
+async def get_user_permissions(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all permissions for current user"""
+    rbac_service = RBACService()
+    permissions = await rbac_service.get_user_permissions(current_user, db)
+    return {"success": True, "permissions": permissions}
+
+@app.post("/auth/permissions/grant")
+async def grant_permission(
+    request: PermissionGrantRequest,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Grant permission to user (Admin only)"""
+    rbac_service = RBACService()
+    user = db.query(User).filter(User.id == request.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    result = await rbac_service.grant_permission(user, request.permission, db)
+    return result
+
+@app.post("/auth/permissions/revoke")
+async def revoke_permission(
+    request: PermissionRevokeRequest,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Revoke permission from user (Admin only)"""
+    rbac_service = RBACService()
+    user = db.query(User).filter(User.id == request.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    result = await rbac_service.revoke_permission(user, request.permission, db)
+    return result
+
+@app.post("/auth/permissions/create")
+async def create_permission(
+    request: PermissionCreateRequest,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new permission (Admin only)"""
+    rbac_service = RBACService()
+    result = await rbac_service.create_permission(
+        request.name,
+        request.resource,
+        request.action,
+        request.description,
+        db
+    )
+    return result
+
+@app.post("/auth/permissions/initialize")
+async def initialize_permissions(
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Initialize default permissions (Admin only)"""
+    rbac_service = RBACService()
+    result = await rbac_service.initialize_default_permissions(db)
+    return result
 
 @app.get("/tours", response_model=List[TourSchema])
 async def get_tours(db: Session = Depends(get_db)):
@@ -574,11 +986,15 @@ async def get_pool_stats():
     return manager.get_connection_pool_stats()
 
 @app.post("/database/backup")
-async def create_backup(backup_name: Optional[str] = None):
-    """Create a database backup"""
+async def create_backup(
+    backup_name: Optional[str] = None,
+    encrypt: bool = True,
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Create a database backup (with encryption) - Admin only"""
     from db_utils import DatabaseManager
     manager = DatabaseManager()
-    return manager.backup_database(backup_name=backup_name)
+    return manager.backup_database(backup_name=backup_name, encrypt=encrypt)
 
 @app.get("/database/backups")
 async def list_backups():
@@ -828,7 +1244,255 @@ async def submit_contact_form(contact: ContactFormSchema, db: Session = Depends(
         }
     }
 
+# ========== SECURITY & COMPLIANCE ENDPOINTS ==========
+
+@app.post("/security/data/export")
+async def export_user_data(
+    request: DataExportRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Export user data (GDPR Right to Access)"""
+    # Users can only export their own data, admins can export any user's data
+    user_id = request.user_id
+    if current_user.role.value != "admin" and current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="You can only export your own data")
+    
+    compliance_service = ComplianceService()
+    result = compliance_service.export_user_data(user_id, db)
+    
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "Export failed"))
+    
+    if request.format == "csv":
+        csv_data = compliance_service.export_data_csv(user_id, db)
+        return Response(
+            content=csv_data,
+            media_type="text/csv",
+            headers={"Content-Disposition": f"attachment; filename=user_data_{user_id}.csv"}
+        )
+    else:
+        json_data = compliance_service.export_data_json(user_id, db)
+        return Response(
+            content=json_data,
+            media_type="application/json",
+            headers={"Content-Disposition": f"attachment; filename=user_data_{user_id}.json"}
+        )
+
+@app.post("/security/data/delete")
+async def delete_user_data(
+    request: DataDeletionRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Delete or anonymize user data (GDPR Right to be Forgotten) - Admin only"""
+    compliance_service = ComplianceService()
+    result = compliance_service.delete_user_data(
+        request.user_id,
+        db,
+        anonymize=request.anonymize
+    )
+    
+    if not result["success"]:
+        raise HTTPException(status_code=400, detail=result.get("error", "Deletion failed"))
+    
+    return result
+
+@app.get("/security/data/consent/{user_id}")
+async def get_consent_status(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get user consent status"""
+    if current_user.role.value != "admin" and current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="You can only view your own consent status")
+    
+    compliance_service = ComplianceService()
+    return compliance_service.get_consent_status(user_id, db)
+
+@app.post("/security/data/consent/{user_id}")
+async def update_consent(
+    user_id: int,
+    request: ConsentUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """Update user consent"""
+    if current_user.role.value != "admin" and current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="You can only update your own consent")
+    
+    compliance_service = ComplianceService()
+    return compliance_service.update_consent(user_id, request.consent_type, request.granted, db)
+
+@app.post("/security/retention/policy")
+async def create_retention_policy(
+    request: RetentionPolicyRequest,
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Create or update a retention policy - Admin only"""
+    retention_service = RetentionService()
+    policy = RetentionPolicy(
+        data_type=request.data_type,
+        retention_days=request.retention_days,
+        action=request.action or "anonymize"
+    )
+    retention_service.add_policy(policy)
+    return {
+        "success": True,
+        "message": f"Retention policy for {request.data_type} created",
+        "policy": {
+            "data_type": policy.data_type,
+            "retention_days": policy.retention_days,
+            "action": policy.action
+        }
+    }
+
+@app.post("/security/retention/apply")
+async def apply_retention_policy(
+    request: RetentionApplyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Apply retention policies - Admin only"""
+    retention_service = RetentionService()
+    
+    if request.data_type:
+        result = retention_service.apply_retention_policy(
+            request.data_type,
+            db,
+            dry_run=request.dry_run
+        )
+    else:
+        result = retention_service.apply_all_policies(db, dry_run=request.dry_run)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Retention policy application failed"))
+    
+    return result
+
+@app.get("/security/retention/policies")
+async def list_retention_policies(
+    current_user: User = Depends(get_current_admin_user)
+):
+    """List all retention policies - Admin only"""
+    retention_service = RetentionService()
+    policies = {}
+    for data_type, policy in retention_service.policies.items():
+        policies[data_type] = {
+            "retention_days": policy.retention_days,
+            "action": policy.action,
+            "cutoff_date": policy.get_cutoff_date().isoformat()
+        }
+    return {
+        "success": True,
+        "policies": policies
+    }
+
+@app.post("/security/backup/create")
+async def create_encrypted_backup(
+    request: BackupRequest,
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Create an encrypted database backup - Admin only"""
+    from db_utils import DatabaseManager
+    manager = DatabaseManager()
+    result = manager.backup_database(
+        backup_name=request.backup_name,
+        encrypt=request.encrypt
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "Backup failed"))
+    
+    return result
+
+@app.post("/security/backup/restore")
+async def restore_backup(
+    request: RestoreRequest,
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Restore database from backup - Admin only"""
+    from db_utils import DatabaseManager
+    manager = DatabaseManager()
+    result = manager.restore_database(
+        backup_path=request.backup_path,
+        drop_existing=request.drop_existing,
+        encrypted=request.encrypted
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("message", "Restore failed"))
+    
+    return result
+
+@app.get("/security/backup/list")
+async def list_backups(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
+    """List all backups - Admin only"""
+    from db_utils import DatabaseManager
+    from models import BackupRecord
+    manager = DatabaseManager()
+    
+    # Get backups from filesystem
+    file_backups = manager.list_backups()
+    
+    # Get backups from database
+    db_backups = db.query(BackupRecord).order_by(BackupRecord.created_at.desc()).all()
+    db_backup_list = [
+        {
+            "name": b.backup_name,
+            "path": b.backup_path,
+            "size": b.file_size,
+            "size_mb": round(b.file_size / (1024 * 1024), 2),
+            "encrypted": b.encrypted,
+            "status": b.status,
+            "created_at": b.created_at.isoformat() if b.created_at else None
+        }
+        for b in db_backups
+    ]
+    
+    return {
+        "success": True,
+        "file_backups": file_backups,
+        "database_backups": db_backup_list
+    }
+
+@app.get("/security/encryption/key/generate")
+async def generate_encryption_key(
+    current_user: User = Depends(get_current_admin_user)
+):
+    """Generate a new encryption key (for setup) - Admin only"""
+    encryption_service = get_encryption_service()
+    key = encryption_service.generate_encryption_key()
+    return {
+        "success": True,
+        "encryption_key": key,
+        "message": "Add this key to your .env file as ENCRYPTION_KEY",
+        "warning": "Keep this key secure and never commit it to version control!"
+    }
+
+# Initialize scheduler service on startup
+@app.on_event("startup")
+async def startup_event():
+    """Initialize services on application startup"""
+    from services.scheduler_service import get_scheduler_service
+    scheduler = get_scheduler_service()
+    scheduler.start()
+    logger.info("Application startup: Scheduler service initialized")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on application shutdown"""
+    from services.scheduler_service import get_scheduler_service
+    scheduler = get_scheduler_service()
+    scheduler.stop()
+    logger.info("Application shutdown: Scheduler service stopped")
+
 if __name__ == "__main__":
     import uvicorn
+    logging.basicConfig(level=logging.INFO)
     uvicorn.run(app, host="0.0.0.0", port=8000)
 

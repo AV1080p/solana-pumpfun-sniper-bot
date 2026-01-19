@@ -21,4 +21,12 @@ google-auth==2.25.2
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 email-validator==2.1.0
+cryptography==41.0.7
+pycryptodome==3.19.0
+python-gnupg==0.5.1
+schedule==1.2.0
+pyotp==2.9.0
+qrcode[pil]==7.4.2
+python3-saml==1.15.0
+onelogin==1.0.0
 
