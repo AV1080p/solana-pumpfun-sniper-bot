@@ -83,3 +83,9 @@ export const TrendingUpIcon = ({ className = '', size = 20 }: IconProps) => (
   </svg>
 )
 
+export const FilterIcon = ({ className = '', size = 20 }: IconProps) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className}>
+    <path d="M22 3H2l8 9.46V19l4 2v-8.54L22 3z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+  </svg>
+)
+

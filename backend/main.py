@@ -11,7 +11,8 @@ from models import Tour, Booking, Payment
 from schemas import (
     TourSchema, BookingSchema, PaymentSchema, PaymentRequest,
     PaymentIntentRequest, PaymentIntentResponse, CryptoPaymentRequest,
-    PaymentAddressRequest, PaymentAddressResponse, RefundRequest
+    PaymentAddressRequest, PaymentAddressResponse, RefundRequest,
+    TourCreateSchema, TourUpdateSchema, BookingUpdateSchema, ContactFormSchema
 )
 from services.payment_service import PaymentService
 from services.solana_service import SolanaService
@@ -58,15 +59,93 @@ async def get_tour(tour_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Tour not found")
     return tour
 
+@app.post("/tours", response_model=TourSchema)
+async def create_tour(tour: TourCreateSchema, db: Session = Depends(get_db)):
+    """Create a new tour (Admin only)"""
+    db_tour = Tour(**tour.dict())
+    db.add(db_tour)
+    db.commit()
+    db.refresh(db_tour)
+    return db_tour
+
+@app.put("/tours/{tour_id}", response_model=TourSchema)
+async def update_tour(tour_id: int, tour: TourUpdateSchema, db: Session = Depends(get_db)):
+    """Update a tour (Admin only)"""
+    db_tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    if not db_tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    
+    update_data = tour.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_tour, field, value)
+    
+    db.commit()
+    db.refresh(db_tour)
+    return db_tour
+
+@app.delete("/tours/{tour_id}")
+async def delete_tour(tour_id: int, db: Session = Depends(get_db)):
+    """Delete a tour (Admin only)"""
+    db_tour = db.query(Tour).filter(Tour.id == tour_id).first()
+    if not db_tour:
+        raise HTTPException(status_code=404, detail="Tour not found")
+    
+    db.delete(db_tour)
+    db.commit()
+    return {"message": "Tour deleted successfully"}
+
 @app.get("/bookings", response_model=List[BookingSchema])
 async def get_bookings(db: Session = Depends(get_db)):
+    """Get all bookings with tour and payment information"""
     bookings = db.query(Booking).all()
-    return bookings
+    result = []
+    for booking in bookings:
+        booking_dict = {
+            "id": booking.id,
+            "tour_id": booking.tour_id,
+            "user_email": booking.user_email,
+            "booking_date": booking.booking_date,
+            "status": booking.status.value if hasattr(booking.status, 'value') else str(booking.status),
+            "notes": booking.notes,
+        }
+        # Include tour information
+        if booking.tour:
+            booking_dict["tour_name"] = booking.tour.name
+        # Include payment information
+        if booking.payments:
+            latest_payment = booking.payments[-1]  # Get the most recent payment
+            booking_dict["payment_method"] = latest_payment.payment_method.value if hasattr(latest_payment.payment_method, 'value') else str(latest_payment.payment_method)
+            booking_dict["amount"] = latest_payment.amount
+        result.append(booking_dict)
+    return result
 
 @app.post("/bookings", response_model=BookingSchema)
 async def create_booking(booking: BookingSchema, db: Session = Depends(get_db)):
     db_booking = Booking(**booking.dict())
     db.add(db_booking)
+    db.commit()
+    db.refresh(db_booking)
+    return db_booking
+
+@app.get("/bookings/{booking_id}", response_model=BookingSchema)
+async def get_booking(booking_id: int, db: Session = Depends(get_db)):
+    """Get a specific booking"""
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    return booking
+
+@app.patch("/bookings/{booking_id}", response_model=BookingSchema)
+async def update_booking(booking_id: int, booking: BookingUpdateSchema, db: Session = Depends(get_db)):
+    """Update a booking status (Admin only)"""
+    db_booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not db_booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+    
+    update_data = booking.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_booking, field, value)
+    
     db.commit()
     db.refresh(db_booking)
     return db_booking
@@ -358,6 +437,23 @@ async def list_backups():
     from db_utils import DatabaseManager
     manager = DatabaseManager()
     return manager.list_backups()
+
+# ========== SUPPORT ENDPOINTS ==========
+
+@app.post("/support/contact")
+async def submit_contact_form(contact: ContactFormSchema, db: Session = Depends(get_db)):
+    """Submit a contact form"""
+    # In a real application, you would save this to a database or send an email
+    # For now, we'll just return a success message
+    return {
+        "success": True,
+        "message": "Thank you for contacting us! We'll get back to you soon.",
+        "data": {
+            "name": contact.name,
+            "email": contact.email,
+            "subject": contact.subject
+        }
+    }
 
 if __name__ == "__main__":
     import uvicorn

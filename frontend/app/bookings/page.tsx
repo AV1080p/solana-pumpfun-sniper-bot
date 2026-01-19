@@ -62,6 +62,22 @@ export default function BookingsPage() {
                 <span>Tours</span>
                 <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-primary-600 transition-all group-hover:w-full"></span>
               </Link>
+              <Link 
+                href="/services" 
+                className="text-gray-700 hover:text-primary-600 font-medium transition-colors relative group flex items-center gap-2"
+              >
+                <span className="text-lg">🎯</span>
+                <span>Services</span>
+                <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-primary-600 transition-all group-hover:w-full"></span>
+              </Link>
+              <Link 
+                href="/support" 
+                className="text-gray-700 hover:text-primary-600 font-medium transition-colors relative group flex items-center gap-2"
+              >
+                <span className="text-lg">💬</span>
+                <span>Support</span>
+                <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-primary-600 transition-all group-hover:w-full"></span>
+              </Link>
               <div className="wallet-adapter-button-trigger">
                 <WalletMultiButton className="!bg-gradient-to-r !from-primary-600 !to-purple-600 hover:!from-primary-700 hover:!to-purple-700 !rounded-xl !font-semibold !shadow-lg hover:!shadow-glow transition-all" />
               </div>

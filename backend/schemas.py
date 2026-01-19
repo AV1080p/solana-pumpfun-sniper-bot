@@ -22,6 +22,9 @@ class BookingSchema(BaseModel):
     booking_date: Optional[datetime] = None
     status: Optional[str] = "pending"
     notes: Optional[str] = None
+    tour_name: Optional[str] = None
+    payment_method: Optional[str] = None
+    amount: Optional[float] = None
 
     class Config:
         from_attributes = True
@@ -79,4 +82,32 @@ class PaymentAddressResponse(BaseModel):
 class RefundRequest(BaseModel):
     payment_id: int
     amount: Optional[float] = None
+
+class TourCreateSchema(BaseModel):
+    name: str
+    description: Optional[str] = None
+    price: float
+    price_sol: float
+    duration: Optional[str] = None
+    location: Optional[str] = None
+    image_url: Optional[str] = None
+
+class TourUpdateSchema(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    price: Optional[float] = None
+    price_sol: Optional[float] = None
+    duration: Optional[str] = None
+    location: Optional[str] = None
+    image_url: Optional[str] = None
+
+class BookingUpdateSchema(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+class ContactFormSchema(BaseModel):
+    name: str
+    email: EmailStr
+    subject: str
+    message: str
 
