@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List, Optional
+from fastapi import Query
 import os
 from dotenv import load_dotenv
 
@@ -12,11 +13,16 @@ from schemas import (
     TourSchema, BookingSchema, PaymentSchema, PaymentRequest,
     PaymentIntentRequest, PaymentIntentResponse, CryptoPaymentRequest,
     PaymentAddressRequest, PaymentAddressResponse, RefundRequest,
-    TourCreateSchema, TourUpdateSchema, BookingUpdateSchema, ContactFormSchema
+    TourCreateSchema, TourUpdateSchema, BookingUpdateSchema, ContactFormSchema,
+    UserRegisterSchema, UserLoginSchema, UserSchema, TokenResponse,
+    OAuthTokenRequest, OAuthCallbackRequest
 )
 from services.payment_service import PaymentService
 from services.solana_service import SolanaService
 from services.crypto_service import CryptoService
+from services.auth_service import AuthService
+from auth import get_current_user, get_current_active_user, get_current_admin_user, get_optional_user
+from models import User
 
 load_dotenv()
 
@@ -47,6 +53,110 @@ def get_db():
 async def root():
     return {"message": "Tourist App API", "version": "1.0.0"}
 
+# ========== AUTHENTICATION ENDPOINTS ==========
+
+@app.post("/auth/register", response_model=TokenResponse)
+async def register(
+    user_data: UserRegisterSchema,
+    db: Session = Depends(get_db)
+):
+    """Register a new user with email/password"""
+    auth_service = AuthService()
+    result = await auth_service.register_user(
+        email=user_data.email,
+        password=user_data.password,
+        full_name=user_data.full_name,
+        username=user_data.username,
+        db=db
+    )
+    return result
+
+@app.post("/auth/login", response_model=TokenResponse)
+async def login(
+    credentials: UserLoginSchema,
+    db: Session = Depends(get_db)
+):
+    """Login with email/password"""
+    auth_service = AuthService()
+    result = await auth_service.login_user(
+        email=credentials.email,
+        password=credentials.password,
+        db=db
+    )
+    return result
+
+@app.post("/auth/oauth/token", response_model=TokenResponse)
+async def oauth_token_verify(
+    oauth_request: OAuthTokenRequest,
+    db: Session = Depends(get_db)
+):
+    """Verify OAuth token from provider (Google, GitHub, etc.)"""
+    auth_service = AuthService()
+    
+    provider = oauth_request.provider.lower()
+    if provider == "google":
+        result = await auth_service.verify_google_token(oauth_request.token, db)
+    elif provider == "github":
+        result = await auth_service.verify_github_token(oauth_request.token, db)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported OAuth provider: {provider}"
+        )
+    
+    return result
+
+@app.get("/auth/oauth/{provider}/url")
+async def get_oauth_url(provider: str):
+    """Get OAuth authorization URL for a provider"""
+    auth_service = AuthService()
+    return auth_service.get_oauth_url(provider)
+
+@app.get("/auth/{provider}/callback")
+async def oauth_callback(
+    provider: str,
+    code: str,
+    db: Session = Depends(get_db)
+):
+    """Handle OAuth callback and redirect to frontend with token"""
+    from fastapi.responses import RedirectResponse
+    
+    auth_service = AuthService()
+    result = await auth_service.handle_oauth_callback(provider, code, db)
+    
+    # Redirect to frontend with token
+    frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
+    redirect_url = f"{frontend_url}/auth/callback?token={result['access_token']}&success=true"
+    return RedirectResponse(url=redirect_url)
+
+@app.get("/auth/me", response_model=UserSchema)
+async def get_current_user_info(
+    current_user: User = Depends(get_current_active_user)
+):
+    """Get current authenticated user information"""
+    return {
+        "id": current_user.id,
+        "email": current_user.email,
+        "username": current_user.username,
+        "full_name": current_user.full_name,
+        "role": current_user.role.value,
+        "avatar_url": current_user.avatar_url,
+        "is_verified": current_user.is_verified,
+        "auth_provider": current_user.auth_provider.value
+    }
+
+@app.post("/auth/refresh")
+async def refresh_token(
+    current_user: User = Depends(get_current_active_user)
+):
+    """Refresh access token"""
+    from auth import create_access_token
+    access_token = create_access_token(data={"sub": current_user.id, "email": current_user.email})
+    return {
+        "access_token": access_token,
+        "token_type": "bearer"
+    }
+
 @app.get("/tours", response_model=List[TourSchema])
 async def get_tours(db: Session = Depends(get_db)):
     tours = db.query(Tour).all()
@@ -60,7 +170,11 @@ async def get_tour(tour_id: int, db: Session = Depends(get_db)):
     return tour
 
 @app.post("/tours", response_model=TourSchema)
-async def create_tour(tour: TourCreateSchema, db: Session = Depends(get_db)):
+async def create_tour(
+    tour: TourCreateSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
     """Create a new tour (Admin only)"""
     db_tour = Tour(**tour.dict())
     db.add(db_tour)
@@ -69,7 +183,12 @@ async def create_tour(tour: TourCreateSchema, db: Session = Depends(get_db)):
     return db_tour
 
 @app.put("/tours/{tour_id}", response_model=TourSchema)
-async def update_tour(tour_id: int, tour: TourUpdateSchema, db: Session = Depends(get_db)):
+async def update_tour(
+    tour_id: int,
+    tour: TourUpdateSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
     """Update a tour (Admin only)"""
     db_tour = db.query(Tour).filter(Tour.id == tour_id).first()
     if not db_tour:
@@ -84,7 +203,11 @@ async def update_tour(tour_id: int, tour: TourUpdateSchema, db: Session = Depend
     return db_tour
 
 @app.delete("/tours/{tour_id}")
-async def delete_tour(tour_id: int, db: Session = Depends(get_db)):
+async def delete_tour(
+    tour_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
     """Delete a tour (Admin only)"""
     db_tour = db.query(Tour).filter(Tour.id == tour_id).first()
     if not db_tour:
@@ -95,9 +218,16 @@ async def delete_tour(tour_id: int, db: Session = Depends(get_db)):
     return {"message": "Tour deleted successfully"}
 
 @app.get("/bookings", response_model=List[BookingSchema])
-async def get_bookings(db: Session = Depends(get_db)):
+async def get_bookings(
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user),
+    user_only: bool = Query(False, description="Get only current user's bookings")
+):
     """Get all bookings with tour and payment information"""
-    bookings = db.query(Booking).all()
+    if user_only and current_user:
+        bookings = db.query(Booking).filter(Booking.user_id == current_user.id).all()
+    else:
+        bookings = db.query(Booking).all()
     result = []
     for booking in bookings:
         booking_dict = {
@@ -120,8 +250,20 @@ async def get_bookings(db: Session = Depends(get_db)):
     return result
 
 @app.post("/bookings", response_model=BookingSchema)
-async def create_booking(booking: BookingSchema, db: Session = Depends(get_db)):
-    db_booking = Booking(**booking.dict())
+async def create_booking(
+    booking: BookingSchema,
+    db: Session = Depends(get_db),
+    current_user: Optional[User] = Depends(get_optional_user)
+):
+    """Create a new booking"""
+    booking_data = booking.dict()
+    # Link booking to authenticated user if available
+    if current_user:
+        booking_data["user_id"] = current_user.id
+        if not booking_data.get("user_email"):
+            booking_data["user_email"] = current_user.email
+    
+    db_booking = Booking(**booking_data)
     db.add(db_booking)
     db.commit()
     db.refresh(db_booking)
@@ -136,7 +278,12 @@ async def get_booking(booking_id: int, db: Session = Depends(get_db)):
     return booking
 
 @app.patch("/bookings/{booking_id}", response_model=BookingSchema)
-async def update_booking(booking_id: int, booking: BookingUpdateSchema, db: Session = Depends(get_db)):
+async def update_booking(
+    booking_id: int,
+    booking: BookingUpdateSchema,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_admin_user)
+):
     """Update a booking status (Admin only)"""
     db_booking = db.query(Booking).filter(Booking.id == booking_id).first()
     if not db_booking:

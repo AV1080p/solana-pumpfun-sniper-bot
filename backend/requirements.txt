@@ -16,4 +16,9 @@ boto3==1.29.7
 pytest==7.4.3
 pytest-asyncio==0.21.1
 web3==6.15.1
+authlib==1.2.1
+google-auth==2.25.2
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
+email-validator==2.1.0
 

@@ -111,3 +111,42 @@ class ContactFormSchema(BaseModel):
     subject: str
     message: str
 
+# ========== AUTHENTICATION SCHEMAS ==========
+
+class UserRegisterSchema(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: Optional[str] = None
+    username: Optional[str] = None
+
+class UserLoginSchema(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserSchema(BaseModel):
+    id: int
+    email: str
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    role: str
+    avatar_url: Optional[str] = None
+    is_verified: bool
+    auth_provider: str
+
+    class Config:
+        from_attributes = True
+
+class TokenResponse(BaseModel):
+    success: bool
+    access_token: str
+    token_type: str
+    user: UserSchema
+
+class OAuthTokenRequest(BaseModel):
+    token: str
+    provider: str  # "google", "github", etc.
+
+class OAuthCallbackRequest(BaseModel):
+    code: str
+    provider: str
+

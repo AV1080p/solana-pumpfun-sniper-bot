@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Enum, Text, Index, CheckConstraint
+from sqlalchemy import Column, Integer, String, Float, DateTime, ForeignKey, Enum, Text, Index, CheckConstraint, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM, UUID
 from database import Base
@@ -25,6 +25,56 @@ class PaymentStatus(str, enum.Enum):
     FAILED = "failed"
     REFUNDED = "refunded"
     CANCELLED = "cancelled"
+
+class AuthProvider(str, enum.Enum):
+    EMAIL = "email"
+    GOOGLE = "google"
+    GITHUB = "github"
+    FACEBOOK = "facebook"
+    APPLE = "apple"
+
+class UserRole(str, enum.Enum):
+    USER = "user"
+    ADMIN = "admin"
+    MODERATOR = "moderator"
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    uuid = Column(UUID(as_uuid=True), default=uuid.uuid4, unique=True, nullable=False, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
+    username = Column(String(100), unique=True, nullable=True, index=True)
+    full_name = Column(String(255), nullable=True)
+    hashed_password = Column(String(255), nullable=True)  # Nullable for OAuth users
+    auth_provider = Column(
+        PG_ENUM(AuthProvider, name="auth_provider", create_type=True),
+        default=AuthProvider.EMAIL,
+        nullable=False,
+        index=True
+    )
+    provider_id = Column(String(255), nullable=True, index=True)  # OAuth provider user ID
+    role = Column(
+        PG_ENUM(UserRole, name="user_role", create_type=True),
+        default=UserRole.USER,
+        nullable=False
+    )
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_verified = Column(Boolean, default=False, nullable=False)
+    avatar_url = Column(String(500), nullable=True)
+    phone_number = Column(String(20), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_login = Column(DateTime(timezone=True), nullable=True)
+    
+    # Relationships
+    bookings = relationship("Booking", back_populates="user", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index('idx_users_email', 'email'),
+        Index('idx_users_provider', 'auth_provider', 'provider_id'),
+        Index('idx_users_uuid', 'uuid'),
+    )
 
 class Tour(Base):
     __tablename__ = "tours"
@@ -54,7 +104,8 @@ class Booking(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     tour_id = Column(Integer, ForeignKey("tours.id", ondelete="CASCADE"), nullable=False, index=True)
-    user_email = Column(String(255), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_email = Column(String(255), nullable=False, index=True)  # Keep for backward compatibility
     booking_date = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     status = Column(
         PG_ENUM(BookingStatus, name="booking_status", create_type=True),
@@ -67,6 +118,7 @@ class Booking(Base):
     notes = Column(Text)
 
     tour = relationship("Tour", back_populates="bookings")
+    user = relationship("User", back_populates="bookings")
     payments = relationship("Payment", back_populates="booking", cascade="all, delete-orphan")
 
     __table_args__ = (
