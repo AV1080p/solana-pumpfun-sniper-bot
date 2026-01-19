@@ -8,14 +8,16 @@ import os
 from dotenv import load_dotenv
 
 from database import SessionLocal, engine, Base
-from models import Tour, Booking, Payment
+from models import Tour, Booking, Payment, User, Invoice, Feedback
 from schemas import (
     TourSchema, BookingSchema, PaymentSchema, PaymentRequest,
     PaymentIntentRequest, PaymentIntentResponse, CryptoPaymentRequest,
     PaymentAddressRequest, PaymentAddressResponse, RefundRequest,
     TourCreateSchema, TourUpdateSchema, BookingUpdateSchema, ContactFormSchema,
     UserRegisterSchema, UserLoginSchema, UserSchema, TokenResponse,
-    OAuthTokenRequest, OAuthCallbackRequest
+    OAuthTokenRequest, OAuthCallbackRequest,
+    AccountSettingsUpdateSchema, PasswordUpdateSchema, InvoiceSchema,
+    UsageAnalyticsSchema, FeedbackSchema, FeedbackCreateSchema
 )
 from services.payment_service import PaymentService
 from services.solana_service import SolanaService
@@ -584,6 +586,230 @@ async def list_backups():
     from db_utils import DatabaseManager
     manager = DatabaseManager()
     return manager.list_backups()
+
+# ========== CUSTOMER DASHBOARD ENDPOINTS ==========
+
+@app.get("/dashboard/account", response_model=dict)
+async def get_account_settings(
+    user_email: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get account settings for a user"""
+    if not user_email:
+        # In a real app, get from authenticated user
+        return {"error": "User email required"}
+    
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        return {
+            "email": user_email,
+            "full_name": None,
+            "username": None,
+            "phone_number": None,
+            "avatar_url": None,
+            "is_verified": False
+        }
+    
+    return {
+        "email": user.email,
+        "full_name": user.full_name,
+        "username": user.username,
+        "phone_number": user.phone_number,
+        "avatar_url": user.avatar_url,
+        "is_verified": user.is_verified,
+        "created_at": user.created_at.isoformat() if user.created_at else None
+    }
+
+@app.patch("/dashboard/account")
+async def update_account_settings(
+    settings: AccountSettingsUpdateSchema,
+    user_email: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Update account settings"""
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email required")
+    
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    update_data = settings.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(user, field, value)
+    
+    db.commit()
+    db.refresh(user)
+    return {"success": True, "message": "Account settings updated successfully"}
+
+@app.get("/dashboard/invoices", response_model=List[InvoiceSchema])
+async def get_user_invoices(
+    user_email: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get invoices for a user"""
+    if not user_email:
+        return []
+    
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        return []
+    
+    invoices = db.query(Invoice).filter(Invoice.user_id == user.id).order_by(Invoice.created_at.desc()).all()
+    return invoices
+
+@app.get("/dashboard/invoices/{invoice_id}", response_model=InvoiceSchema)
+async def get_invoice(invoice_id: int, db: Session = Depends(get_db)):
+    """Get a specific invoice"""
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return invoice
+
+@app.get("/dashboard/analytics", response_model=UsageAnalyticsSchema)
+async def get_usage_analytics(
+    user_email: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get usage analytics for a user"""
+    if not user_email:
+        return {
+            "total_bookings": 0,
+            "total_spent": 0.0,
+            "favorite_destinations": [],
+            "booking_trends": {},
+            "payment_methods_used": {},
+            "recent_activity": []
+        }
+    
+    user = db.query(User).filter(User.email == user_email).first()
+    if not user:
+        return {
+            "total_bookings": 0,
+            "total_spent": 0.0,
+            "favorite_destinations": [],
+            "booking_trends": {},
+            "payment_methods_used": {},
+            "recent_activity": []
+        }
+    
+    # Get bookings
+    bookings = db.query(Booking).filter(Booking.user_email == user_email).all()
+    total_bookings = len(bookings)
+    
+    # Get payments and calculate total spent
+    payments = db.query(Payment).join(Booking).filter(Booking.user_email == user_email).filter(Payment.status == "completed").all()
+    total_spent = sum(p.amount for p in payments)
+    
+    # Get favorite destinations
+    tour_ids = [b.tour_id for b in bookings]
+    tours = db.query(Tour).filter(Tour.id.in_(tour_ids)).all() if tour_ids else []
+    location_counts = {}
+    for booking in bookings:
+        tour = next((t for t in tours if t.id == booking.tour_id), None)
+        if tour and tour.location:
+            location_counts[tour.location] = location_counts.get(tour.location, 0) + 1
+    favorite_destinations = sorted(location_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    
+    # Booking trends (last 6 months)
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    trends = defaultdict(int)
+    six_months_ago = datetime.utcnow() - timedelta(days=180)
+    for booking in bookings:
+        if booking.created_at and booking.created_at >= six_months_ago:
+            month_key = booking.created_at.strftime("%Y-%m")
+            trends[month_key] += 1
+    
+    # Payment methods used
+    payment_methods = defaultdict(int)
+    for payment in payments:
+        method = payment.payment_method.value if hasattr(payment.payment_method, 'value') else str(payment.payment_method)
+        payment_methods[method] += 1
+    
+    # Recent activity
+    recent_activity = []
+    for booking in bookings[:10]:
+        tour = next((t for t in tours if t.id == booking.tour_id), None)
+        recent_activity.append({
+            "type": "booking",
+            "description": f"Booked {tour.name if tour else 'Tour'}" if tour else "Made a booking",
+            "date": booking.created_at.isoformat() if booking.created_at else None
+        })
+    
+    return {
+        "total_bookings": total_bookings,
+        "total_spent": total_spent,
+        "favorite_destinations": [{"location": loc, "count": count} for loc, count in favorite_destinations],
+        "booking_trends": dict(trends),
+        "payment_methods_used": dict(payment_methods),
+        "recent_activity": recent_activity
+    }
+
+@app.get("/dashboard/documentation")
+async def get_documentation_links():
+    """Get documentation links"""
+    return {
+        "links": [
+            {
+                "title": "Getting Started Guide",
+                "url": "/docs/getting-started",
+                "description": "Learn how to book your first tour"
+            },
+            {
+                "title": "Payment Methods",
+                "url": "/docs/payments",
+                "description": "Information about payment options"
+            },
+            {
+                "title": "API Documentation",
+                "url": "/docs/api",
+                "description": "Complete API reference"
+            },
+            {
+                "title": "FAQ",
+                "url": "/support",
+                "description": "Frequently asked questions"
+            }
+        ]
+    }
+
+@app.post("/dashboard/feedback", response_model=FeedbackSchema)
+async def submit_feedback(
+    feedback: FeedbackCreateSchema,
+    user_email: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Submit feedback"""
+    user = None
+    if user_email:
+        user = db.query(User).filter(User.email == user_email).first()
+    
+    db_feedback = Feedback(
+        user_id=user.id if user else None,
+        user_email=user_email or "anonymous@example.com",
+        feedback_type=feedback.feedback_type,
+        subject=feedback.subject,
+        message=feedback.message,
+        rating=feedback.rating,
+        status="open"
+    )
+    db.add(db_feedback)
+    db.commit()
+    db.refresh(db_feedback)
+    return db_feedback
+
+@app.get("/dashboard/feedback", response_model=List[FeedbackSchema])
+async def get_user_feedback(
+    user_email: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get feedback submitted by user"""
+    if not user_email:
+        return []
+    
+    feedbacks = db.query(Feedback).filter(Feedback.user_email == user_email).order_by(Feedback.created_at.desc()).all()
+    return feedbacks
 
 # ========== SUPPORT ENDPOINTS ==========
 

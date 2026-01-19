@@ -78,6 +78,14 @@ export default function Home() {
                 <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-primary-600 transition-all group-hover:w-full"></span>
               </Link>
               <Link 
+                href="/dashboard" 
+                className="text-gray-700 hover:text-primary-600 font-medium transition-colors relative group flex items-center gap-2"
+              >
+                <span className="text-lg">📊</span>
+                <span>Dashboard</span>
+                <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-primary-600 transition-all group-hover:w-full"></span>
+              </Link>
+              <Link 
                 href="/support" 
                 className="text-gray-700 hover:text-primary-600 font-medium transition-colors relative group flex items-center gap-2"
               >

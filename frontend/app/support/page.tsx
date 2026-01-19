@@ -84,6 +84,12 @@ export default function SupportPage() {
                 Home
               </Link>
               <Link 
+                href="/dashboard" 
+                className="text-gray-700 hover:text-primary-600 font-medium transition-colors"
+              >
+                Dashboard
+              </Link>
+              <Link 
                 href="/bookings" 
                 className="text-gray-700 hover:text-primary-600 font-medium transition-colors"
               >

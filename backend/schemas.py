@@ -150,3 +150,63 @@ class OAuthCallbackRequest(BaseModel):
     code: str
     provider: str
 
+# ========== CUSTOMER DASHBOARD SCHEMAS ==========
+
+class AccountSettingsUpdateSchema(BaseModel):
+    full_name: Optional[str] = None
+    username: Optional[str] = None
+    phone_number: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+class PasswordUpdateSchema(BaseModel):
+    current_password: str
+    new_password: str
+
+class InvoiceSchema(BaseModel):
+    id: int
+    invoice_number: str
+    user_id: int
+    booking_id: Optional[int] = None
+    payment_id: Optional[int] = None
+    amount: float
+    tax_amount: float
+    total_amount: float
+    currency: str
+    status: str
+    due_date: Optional[datetime] = None
+    paid_at: Optional[datetime] = None
+    created_at: datetime
+    notes: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class UsageAnalyticsSchema(BaseModel):
+    total_bookings: int
+    total_spent: float
+    favorite_destinations: list
+    booking_trends: dict
+    payment_methods_used: dict
+    recent_activity: list
+
+class FeedbackSchema(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    user_email: str
+    feedback_type: str
+    subject: str
+    message: str
+    rating: Optional[int] = None
+    status: str
+    created_at: datetime
+    admin_response: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class FeedbackCreateSchema(BaseModel):
+    feedback_type: str  # bug, feature, general, complaint
+    subject: str
+    message: str
+    rating: Optional[int] = None
+

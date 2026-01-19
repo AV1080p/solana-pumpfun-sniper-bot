@@ -162,3 +162,58 @@ class Payment(Base):
         Index('idx_payments_created_at', 'created_at'),
     )
 
+class Invoice(Base):
+    __tablename__ = "invoices"
+
+    id = Column(Integer, primary_key=True, index=True)
+    invoice_number = Column(String(50), unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id", ondelete="SET NULL"), nullable=True, index=True)
+    payment_id = Column(Integer, ForeignKey("payments.id", ondelete="SET NULL"), nullable=True, index=True)
+    amount = Column(Float, nullable=False)
+    tax_amount = Column(Float, default=0.0, nullable=False)
+    total_amount = Column(Float, nullable=False)
+    currency = Column(String(10), default="USD", nullable=False)
+    status = Column(String(50), default="pending", nullable=False, index=True)  # pending, paid, cancelled
+    due_date = Column(DateTime(timezone=True), nullable=True)
+    paid_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    notes = Column(Text, nullable=True)
+
+    user = relationship("User")
+    booking = relationship("Booking")
+    payment = relationship("Payment")
+
+    __table_args__ = (
+        CheckConstraint('amount >= 0', name='check_invoice_amount_positive'),
+        CheckConstraint('total_amount >= 0', name='check_invoice_total_positive'),
+        Index('idx_invoices_user_id', 'user_id'),
+        Index('idx_invoices_status', 'status'),
+        Index('idx_invoices_created_at', 'created_at'),
+    )
+
+class Feedback(Base):
+    __tablename__ = "feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_email = Column(String(255), nullable=False, index=True)
+    feedback_type = Column(String(50), nullable=False, index=True)  # bug, feature, general, complaint
+    subject = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    rating = Column(Integer, nullable=True)  # 1-5 stars
+    status = Column(String(50), default="open", nullable=False, index=True)  # open, in_progress, resolved, closed
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    admin_response = Column(Text, nullable=True)
+
+    user = relationship("User")
+
+    __table_args__ = (
+        Index('idx_feedback_user_id', 'user_id'),
+        Index('idx_feedback_type', 'feedback_type'),
+        Index('idx_feedback_status', 'status'),
+        Index('idx_feedback_created_at', 'created_at'),
+    )
+
