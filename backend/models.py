@@ -7,6 +7,8 @@ import enum
 class PaymentMethod(str, enum.Enum):
     STRIPE = "stripe"
     SOLANA = "solana"
+    BITCOIN = "bitcoin"
+    ETHEREUM = "ethereum"
 
 class BookingStatus(str, enum.Enum):
     PENDING = "pending"

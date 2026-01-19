@@ -15,4 +15,5 @@ passlib[bcrypt]==1.7.4
 boto3==1.29.7
 pytest==7.4.3
 pytest-asyncio==0.21.1
+web3==6.15.1
 
