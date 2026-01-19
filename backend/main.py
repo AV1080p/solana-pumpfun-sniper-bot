@@ -19,7 +19,9 @@ from services.crypto_service import CryptoService
 
 load_dotenv()
 
-Base.metadata.create_all(bind=engine)
+# Database tables are created via Alembic migrations
+# Run: alembic upgrade head
+# Or use: python db_cli.py init
 
 app = FastAPI(title="Tourist App API", version="1.0.0")
 
@@ -309,7 +311,53 @@ async def get_payment(payment_id: int, db: Session = Depends(get_db)):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy"}
+    """Basic health check endpoint"""
+    from database import check_database_connection
+    db_healthy = check_database_connection()
+    return {
+        "status": "healthy" if db_healthy else "unhealthy",
+        "database": "connected" if db_healthy else "disconnected"
+    }
+
+@app.get("/health/database")
+async def database_health_check():
+    """Comprehensive database health check"""
+    from db_utils import health_check_db
+    return health_check_db()
+
+@app.get("/database/info")
+async def get_database_info_endpoint():
+    """Get database connection information"""
+    from database import get_database_info
+    return get_database_info()
+
+@app.get("/database/stats")
+async def get_database_stats():
+    """Get database statistics"""
+    from db_utils import DatabaseManager
+    manager = DatabaseManager()
+    return manager.get_table_stats()
+
+@app.get("/database/pool-stats")
+async def get_pool_stats():
+    """Get connection pool statistics"""
+    from db_utils import DatabaseManager
+    manager = DatabaseManager()
+    return manager.get_connection_pool_stats()
+
+@app.post("/database/backup")
+async def create_backup(backup_name: Optional[str] = None):
+    """Create a database backup"""
+    from db_utils import DatabaseManager
+    manager = DatabaseManager()
+    return manager.backup_database(backup_name=backup_name)
+
+@app.get("/database/backups")
+async def list_backups():
+    """List all available backups"""
+    from db_utils import DatabaseManager
+    manager = DatabaseManager()
+    return manager.list_backups()
 
 if __name__ == "__main__":
     import uvicorn

@@ -21,6 +21,7 @@ class BookingSchema(BaseModel):
     user_email: Optional[str] = None
     booking_date: Optional[datetime] = None
     status: Optional[str] = "pending"
+    notes: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -32,6 +33,9 @@ class PaymentSchema(BaseModel):
     payment_method: str
     transaction_id: Optional[str] = None
     status: str
+    completed_at: Optional[datetime] = None
+    failure_reason: Optional[str] = None
+    metadata: Optional[str] = None
 
     class Config:
         from_attributes = True
