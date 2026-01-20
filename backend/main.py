@@ -7,6 +7,7 @@ from typing import List, Optional
 from fastapi import Query
 import os
 import logging
+import json
 from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,8 @@ logger = logging.getLogger(__name__)
 from database import SessionLocal, engine, Base
 from models import (
     Tour, Booking, Payment, User, Invoice, Feedback, DataConsent, DataRetentionLog, BackupRecord, AuditLog,
-    ForumPost, ForumReply
+    ForumPost, ForumReply, SupportTicket, SupportMessage, FAQ, SupportAgent, Tutorial, LocalSupport,
+    AISupportConversation, AISupportMessage
 )
 from schemas import (
     TourSchema, BookingSchema, PaymentSchema, PaymentRequest,
@@ -40,7 +42,11 @@ from schemas import (
     CallSessionSchema, CallInitiateRequest,
     BroadcastAlertSchema, BroadcastCreateRequest,
     ForumCategorySchema, ForumPostSchema, ForumPostCreateRequest,
-    ForumReplySchema, ForumReplyCreateRequest, TranslationRequest
+    ForumReplySchema, ForumReplyCreateRequest, TranslationRequest,
+    SupportTicketCreateRequest, SupportTicketSchema, SupportMessageCreateRequest, SupportMessageSchema,
+    SupportTicketUpdateRequest, FAQSchema, FAQCreateRequest, FAQUpdateRequest, FAQFeedbackRequest,
+    TutorialSchema, TutorialCreateRequest, SupportAgentSchema, LocalSupportSchema,
+    AISupportRequest, AISupportResponse, SupportTicketSearchRequest
 )
 from services.payment_service import PaymentService
 from services.solana_service import SolanaService
@@ -56,6 +62,7 @@ from services.saml_service import SAMLService
 from services.oidc_service import OIDCService
 from services.rbac_service import RBACService
 from services.communication_service import CommunicationService
+from services.support_service import SupportService
 from auth import get_current_user, get_current_active_user, get_current_admin_user, get_optional_user
 from models import User, UserRole
 
@@ -1241,21 +1248,497 @@ async def get_user_feedback(
     feedbacks = db.query(Feedback).filter(Feedback.user_email == user_email).order_by(Feedback.created_at.desc()).all()
     return feedbacks
 
-# ========== SUPPORT ENDPOINTS ==========
+# ========== SUPPORT SYSTEM ENDPOINTS ==========
+
+# ========== AI ASSISTANT ==========
+
+@app.post("/support/ai/chat", response_model=AISupportResponse)
+async def ai_support_chat(
+    request: AISupportRequest,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db)
+):
+    """AI support assistant with natural language queries and proactive suggestions"""
+    support_service = SupportService()
+    result = await support_service.process_ai_query(
+        message=request.message,
+        user_id=current_user.id if current_user else None,
+        session_id=request.session_id,
+        context=request.context,
+        db=db
+    )
+    return result
+
+@app.get("/support/ai/conversations/{session_id}")
+async def get_ai_conversation(
+    session_id: str,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db)
+):
+    """Get AI support conversation history"""
+    conversation = db.query(AISupportConversation).filter(
+        AISupportConversation.session_id == session_id
+    ).first()
+    
+    if not conversation:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # Check access
+    if current_user and conversation.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    messages = db.query(AISupportMessage).filter(
+        AISupportMessage.conversation_id == conversation.id
+    ).order_by(AISupportMessage.created_at.asc()).all()
+    
+    return {
+        "success": True,
+        "conversation": {
+            "session_id": conversation.session_id,
+            "user_intent": conversation.user_intent,
+            "resolved": conversation.resolved,
+            "escalated_to_human": conversation.escalated_to_human,
+            "created_at": conversation.created_at
+        },
+        "messages": [
+            {
+                "role": msg.role,
+                "content": msg.content,
+                "confidence_score": msg.confidence_score,
+                "suggested_faqs": json.loads(msg.suggested_faqs) if msg.suggested_faqs else [],
+                "created_at": msg.created_at
+            }
+            for msg in messages
+        ]
+    }
+
+# ========== SUPPORT TICKETS ==========
+
+@app.post("/support/tickets", response_model=SupportTicketSchema)
+async def create_support_ticket(
+    request: SupportTicketCreateRequest,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new support ticket"""
+    support_service = SupportService()
+    user_email = current_user.email if current_user else None
+    
+    if not user_email:
+        raise HTTPException(status_code=400, detail="User email required")
+    
+    result = await support_service.create_ticket(
+        user_id=current_user.id if current_user else None,
+        user_email=user_email,
+        subject=request.subject,
+        description=request.description,
+        category=request.category,
+        priority=request.priority or "normal",
+        language=request.language or "en",
+        db=db
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    
+    return result["ticket"]
+
+@app.get("/support/tickets", response_model=List[SupportTicketSchema])
+async def get_support_tickets(
+    current_user: Optional[User] = Depends(get_optional_user),
+    status: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get support tickets for current user"""
+    support_service = SupportService()
+    user_email = current_user.email if current_user else None
+    
+    if not user_email:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    tickets = await support_service.get_user_tickets(
+        user_id=current_user.id if current_user else None,
+        user_email=user_email,
+        status=status,
+        db=db
+    )
+    
+    return tickets
+
+@app.get("/support/tickets/{ticket_id}", response_model=SupportTicketSchema)
+async def get_support_ticket(
+    ticket_id: int,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific support ticket"""
+    ticket = db.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+    
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    # Check access
+    if current_user:
+        if ticket.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+            raise HTTPException(status_code=403, detail="Access denied")
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    return ticket
+
+@app.get("/support/tickets/{ticket_id}/messages", response_model=List[SupportMessageSchema])
+async def get_ticket_messages(
+    ticket_id: int,
+    current_user: Optional[User] = Depends(get_optional_user),
+    db: Session = Depends(get_db)
+):
+    """Get messages for a support ticket"""
+    ticket = db.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+    
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    # Check access
+    if current_user:
+        if ticket.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+            raise HTTPException(status_code=403, detail="Access denied")
+    else:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    messages = db.query(SupportMessage).filter(
+        and_(
+            SupportMessage.ticket_id == ticket_id,
+            SupportMessage.is_internal == False  # Don't show internal notes to users
+        )
+    ).order_by(SupportMessage.created_at.asc()).all()
+    
+    return messages
+
+@app.post("/support/tickets/{ticket_id}/messages", response_model=SupportMessageSchema)
+async def add_ticket_message(
+    ticket_id: int,
+    request: SupportMessageCreateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Add a message to a support ticket"""
+    ticket = db.query(SupportTicket).filter(SupportTicket.id == ticket_id).first()
+    
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    # Check access
+    if ticket.user_id != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=403, detail="Access denied")
+    
+    support_service = SupportService()
+    sender_type = "agent" if current_user.role == UserRole.ADMIN else "user"
+    
+    result = await support_service.add_message_to_ticket(
+        ticket_id=ticket_id,
+        sender_id=current_user.id,
+        sender_email=current_user.email,
+        sender_type=sender_type,
+        content=request.content,
+        is_internal=False,
+        attachments=request.attachments,
+        db=db
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    
+    return result["message"]
+
+@app.patch("/support/tickets/{ticket_id}", response_model=SupportTicketSchema)
+async def update_support_ticket(
+    ticket_id: int,
+    request: SupportTicketUpdateRequest,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Update a support ticket (Admin only)"""
+    support_service = SupportService()
+    result = await support_service.update_ticket(
+        ticket_id=ticket_id,
+        status=request.status,
+        priority=request.priority,
+        assigned_to=request.assigned_to,
+        resolution=request.resolution,
+        db=db
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    
+    return result["ticket"]
+
+# ========== FAQ ==========
+
+@app.get("/support/faqs", response_model=List[FAQSchema])
+async def get_faqs(
+    category: Optional[str] = None,
+    language: str = Query("en"),
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get FAQs with optional filtering"""
+    support_service = SupportService()
+    faqs = await support_service.get_faqs(
+        category=category,
+        language=language,
+        search=search,
+        db=db
+    )
+    
+    result = []
+    for faq in faqs:
+        faq_dict = {
+            "id": faq.id,
+            "category": faq.category,
+            "question": faq.question,
+            "answer": faq.answer,
+            "language": faq.language,
+            "order": faq.order,
+            "view_count": faq.view_count,
+            "helpful_count": faq.helpful_count,
+            "not_helpful_count": faq.not_helpful_count,
+            "tags": json.loads(faq.tags) if faq.tags else None,
+            "created_at": faq.created_at
+        }
+        result.append(faq_dict)
+    
+    return result
+
+@app.get("/support/faqs/{faq_id}", response_model=FAQSchema)
+async def get_faq(
+    faq_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get a specific FAQ"""
+    support_service = SupportService()
+    faq = await support_service.get_faq(faq_id, db)
+    
+    if not faq:
+        raise HTTPException(status_code=404, detail="FAQ not found")
+    
+    return {
+        "id": faq.id,
+        "category": faq.category,
+        "question": faq.question,
+        "answer": faq.answer,
+        "language": faq.language,
+        "order": faq.order,
+        "view_count": faq.view_count,
+        "helpful_count": faq.helpful_count,
+        "not_helpful_count": faq.not_helpful_count,
+        "tags": json.loads(faq.tags) if faq.tags else None,
+        "created_at": faq.created_at
+    }
+
+@app.post("/support/faqs/{faq_id}/feedback")
+async def submit_faq_feedback(
+    faq_id: int,
+    request: FAQFeedbackRequest,
+    db: Session = Depends(get_db)
+):
+    """Submit feedback on FAQ helpfulness"""
+    support_service = SupportService()
+    result = await support_service.record_faq_feedback(faq_id, request.helpful, db)
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    
+    return result
+
+@app.post("/support/faqs", response_model=FAQSchema)
+async def create_faq(
+    request: FAQCreateRequest,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new FAQ (Admin only)"""
+    faq = FAQ(
+        category=request.category,
+        question=request.question,
+        answer=request.answer,
+        language=request.language or "en",
+        order=request.order or 0,
+        tags=json.dumps(request.tags) if request.tags else None,
+        is_published=True
+    )
+    
+    db.add(faq)
+    db.commit()
+    db.refresh(faq)
+    
+    return {
+        "id": faq.id,
+        "category": faq.category,
+        "question": faq.question,
+        "answer": faq.answer,
+        "language": faq.language,
+        "order": faq.order,
+        "view_count": faq.view_count,
+        "helpful_count": faq.helpful_count,
+        "not_helpful_count": faq.not_helpful_count,
+        "tags": json.loads(faq.tags) if faq.tags else None,
+        "created_at": faq.created_at
+    }
+
+# ========== TUTORIALS ==========
+
+@app.get("/support/tutorials", response_model=List[TutorialSchema])
+async def get_tutorials(
+    category: Optional[str] = None,
+    language: str = Query("en"),
+    db: Session = Depends(get_db)
+):
+    """Get tutorials with optional filtering"""
+    support_service = SupportService()
+    tutorials = await support_service.get_tutorials(
+        category=category,
+        language=language,
+        db=db
+    )
+    
+    result = []
+    for tutorial in tutorials:
+        tutorial_dict = {
+            "id": tutorial.id,
+            "title": tutorial.title,
+            "category": tutorial.category,
+            "description": tutorial.description,
+            "video_url": tutorial.video_url,
+            "thumbnail_url": tutorial.thumbnail_url,
+            "duration_seconds": tutorial.duration_seconds,
+            "language": tutorial.language,
+            "order": tutorial.order,
+            "view_count": tutorial.view_count,
+            "tags": json.loads(tutorial.tags) if tutorial.tags else None,
+            "created_at": tutorial.created_at
+        }
+        result.append(tutorial_dict)
+    
+    return result
+
+@app.get("/support/tutorials/{tutorial_id}", response_model=TutorialSchema)
+async def get_tutorial(
+    tutorial_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get a specific tutorial"""
+    support_service = SupportService()
+    tutorial = await support_service.get_tutorial(tutorial_id, db)
+    
+    if not tutorial:
+        raise HTTPException(status_code=404, detail="Tutorial not found")
+    
+    return {
+        "id": tutorial.id,
+        "title": tutorial.title,
+        "description": tutorial.description,
+        "category": tutorial.category,
+        "video_url": tutorial.video_url,
+        "thumbnail_url": tutorial.thumbnail_url,
+        "duration_seconds": tutorial.duration_seconds,
+        "language": tutorial.language,
+        "order": tutorial.order,
+        "view_count": tutorial.view_count,
+        "tags": json.loads(tutorial.tags) if tutorial.tags else None,
+        "created_at": tutorial.created_at
+    }
+
+# ========== LOCAL SUPPORT ==========
+
+@app.get("/support/local", response_model=List[LocalSupportSchema])
+async def get_local_support(
+    country: Optional[str] = None,
+    city: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get local support locations"""
+    support_service = SupportService()
+    locations = await support_service.get_local_support(
+        country=country,
+        city=city,
+        db=db
+    )
+    
+    result = []
+    for location in locations:
+        location_dict = {
+            "id": location.id,
+            "location": location.location,
+            "country": location.country,
+            "city": location.city,
+            "address": location.address,
+            "phone": location.phone,
+            "email": location.email,
+            "languages": json.loads(location.languages) if location.languages else [],
+            "services": json.loads(location.services) if location.services else None,
+            "availability_hours": json.loads(location.availability_hours) if location.availability_hours else None,
+            "coordinates_lat": location.coordinates_lat,
+            "coordinates_lng": location.coordinates_lng
+        }
+        result.append(location_dict)
+    
+    return result
+
+# ========== SUPPORT AGENTS ==========
+
+@app.get("/support/agents", response_model=List[SupportAgentSchema])
+async def get_available_agents(
+    language: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Get available support agents"""
+    support_service = SupportService()
+    agents = await support_service.get_available_agents(
+        language=language,
+        db=db
+    )
+    
+    result = []
+    for agent in agents:
+        agent_dict = {
+            "id": agent.id,
+            "user_id": agent.user_id,
+            "languages": json.loads(agent.languages) if agent.languages else [],
+            "specialties": json.loads(agent.specialties) if agent.specialties else None,
+            "availability_status": agent.availability_status,
+            "rating": agent.rating,
+            "total_resolved": agent.total_resolved,
+            "response_time_avg": agent.response_time_avg
+        }
+        result.append(agent_dict)
+    
+    return result
+
+# ========== LEGACY CONTACT FORM ==========
 
 @app.post("/support/contact")
 async def submit_contact_form(contact: ContactFormSchema, db: Session = Depends(get_db)):
-    """Submit a contact form"""
-    # In a real application, you would save this to a database or send an email
-    # For now, we'll just return a success message
+    """Submit a contact form (creates a support ticket)"""
+    support_service = SupportService()
+    result = await support_service.create_ticket(
+        user_id=None,
+        user_email=contact.email,
+        subject=contact.subject,
+        description=contact.message,
+        category="general",
+        priority="normal",
+        language="en",
+        db=db
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    
     return {
         "success": True,
         "message": "Thank you for contacting us! We'll get back to you soon.",
-        "data": {
-            "name": contact.name,
-            "email": contact.email,
-            "subject": contact.subject
-        }
+        "ticket_number": result.get("ticket_number")
     }
 
 # ========== SECURITY & COMPLIANCE ENDPOINTS ==========

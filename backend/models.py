@@ -756,3 +756,196 @@ class ForumReply(Base):
         Index('idx_forum_reply_post_created', 'post_id', 'created_at'),
     )
 
+# ========== SUPPORT SYSTEM MODELS ==========
+
+class SupportTicket(Base):
+    """Support ticket system for customer service"""
+    __tablename__ = "support_tickets"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_number = Column(String(50), unique=True, nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    user_email = Column(String(255), nullable=False, index=True)
+    subject = Column(String(500), nullable=False)
+    description = Column(Text, nullable=False)
+    category = Column(String(50), nullable=False, index=True)  # technical, billing, booking, general, emergency
+    priority = Column(String(20), default="normal", nullable=False, index=True)  # low, normal, high, urgent
+    status = Column(String(50), default="open", nullable=False, index=True)  # open, assigned, in_progress, waiting, resolved, closed
+    assigned_to = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    language = Column(String(10), default="en", nullable=False)  # ISO language code
+    ai_suggestions = Column(Text, nullable=True)  # JSON array of AI suggestions
+    resolution = Column(Text, nullable=True)
+    resolved_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("User", foreign_keys=[user_id])
+    assignee = relationship("User", foreign_keys=[assigned_to])
+    messages = relationship("SupportMessage", back_populates="ticket", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_tickets_user_status', 'user_id', 'status'),
+        Index('idx_tickets_assignee_status', 'assigned_to', 'status'),
+        Index('idx_tickets_priority_status', 'priority', 'status'),
+        Index('idx_tickets_created_at', 'created_at'),
+    )
+
+class SupportMessage(Base):
+    """Messages within support tickets"""
+    __tablename__ = "support_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    ticket_id = Column(Integer, ForeignKey("support_tickets.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    sender_email = Column(String(255), nullable=False)
+    sender_type = Column(String(20), nullable=False, index=True)  # user, agent, ai, system
+    content = Column(Text, nullable=False)
+    is_internal = Column(Boolean, default=False, nullable=False)  # Internal notes not visible to user
+    attachments = Column(Text, nullable=True)  # JSON array of attachment URLs
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    ticket = relationship("SupportTicket", back_populates="messages")
+    sender = relationship("User")
+    
+    __table_args__ = (
+        Index('idx_messages_ticket_created', 'ticket_id', 'created_at'),
+    )
+
+class FAQ(Base):
+    """Frequently Asked Questions"""
+    __tablename__ = "faqs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(String(50), nullable=False, index=True)  # booking, payment, account, technical, general
+    question = Column(String(500), nullable=False)
+    answer = Column(Text, nullable=False)
+    language = Column(String(10), default="en", nullable=False, index=True)
+    order = Column(Integer, default=0, nullable=False)
+    view_count = Column(Integer, default=0, nullable=False)
+    helpful_count = Column(Integer, default=0, nullable=False)
+    not_helpful_count = Column(Integer, default=0, nullable=False)
+    is_published = Column(Boolean, default=True, nullable=False, index=True)
+    tags = Column(Text, nullable=True)  # JSON array of tags
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    __table_args__ = (
+        Index('idx_faq_category_published', 'category', 'is_published'),
+        Index('idx_faq_language_published', 'language', 'is_published'),
+    )
+
+class SupportAgent(Base):
+    """Support agent information and availability"""
+    __tablename__ = "support_agents"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    languages = Column(Text, nullable=False)  # JSON array of language codes
+    specialties = Column(Text, nullable=True)  # JSON array of specialties
+    availability_status = Column(String(20), default="offline", nullable=False, index=True)  # online, offline, busy, away
+    max_concurrent_tickets = Column(Integer, default=5, nullable=False)
+    current_tickets_count = Column(Integer, default=0, nullable=False)
+    rating = Column(Float, default=0.0, nullable=False)
+    total_resolved = Column(Integer, default=0, nullable=False)
+    response_time_avg = Column(Float, nullable=True)  # Average response time in minutes
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("User")
+    
+    __table_args__ = (
+        Index('idx_agents_status_active', 'availability_status', 'is_active'),
+    )
+
+class Tutorial(Base):
+    """Video tutorials and guides"""
+    __tablename__ = "tutorials"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(255), nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    category = Column(String(50), nullable=False, index=True)  # getting_started, booking, payment, account, advanced
+    video_url = Column(String(500), nullable=True)
+    thumbnail_url = Column(String(500), nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    language = Column(String(10), default="en", nullable=False, index=True)
+    order = Column(Integer, default=0, nullable=False)
+    view_count = Column(Integer, default=0, nullable=False)
+    is_published = Column(Boolean, default=True, nullable=False, index=True)
+    tags = Column(Text, nullable=True)  # JSON array of tags
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    __table_args__ = (
+        Index('idx_tutorials_category_published', 'category', 'is_published'),
+        Index('idx_tutorials_language_published', 'language', 'is_published'),
+    )
+
+class LocalSupport(Base):
+    """On-ground local support information"""
+    __tablename__ = "local_support"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    location = Column(String(255), nullable=False, index=True)
+    country = Column(String(100), nullable=False, index=True)
+    city = Column(String(100), nullable=False, index=True)
+    address = Column(Text, nullable=False)
+    phone = Column(String(50), nullable=True)
+    email = Column(String(255), nullable=True)
+    languages = Column(Text, nullable=False)  # JSON array of language codes
+    services = Column(Text, nullable=True)  # JSON array of services offered
+    availability_hours = Column(Text, nullable=True)  # JSON object with hours
+    coordinates_lat = Column(Float, nullable=True)
+    coordinates_lng = Column(Float, nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    __table_args__ = (
+        Index('idx_local_support_location', 'country', 'city'),
+        Index('idx_local_support_active', 'is_active'),
+    )
+
+class AISupportConversation(Base):
+    """AI support assistant conversations"""
+    __tablename__ = "ai_support_conversations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    session_id = Column(String(255), unique=True, nullable=False, index=True)
+    context = Column(Text, nullable=True)  # JSON for conversation context
+    user_intent = Column(String(100), nullable=True)  # Detected user intent
+    suggested_actions = Column(Text, nullable=True)  # JSON array of suggested actions
+    resolved = Column(Boolean, default=False, nullable=False)
+    escalated_to_human = Column(Boolean, default=False, nullable=False)
+    ticket_id = Column(Integer, ForeignKey("support_tickets.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("User")
+    ticket = relationship("SupportTicket")
+    messages = relationship("AISupportMessage", back_populates="conversation", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_ai_support_user_session', 'user_id', 'session_id'),
+    )
+
+class AISupportMessage(Base):
+    """Messages in AI support conversations"""
+    __tablename__ = "ai_support_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("ai_support_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(20), nullable=False, index=True)  # user, assistant, system
+    content = Column(Text, nullable=False)
+    confidence_score = Column(Float, nullable=True)  # AI confidence in response
+    suggested_faqs = Column(Text, nullable=True)  # JSON array of related FAQ IDs
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    conversation = relationship("AISupportConversation", back_populates="messages")
+    
+    __table_args__ = (
+        Index('idx_ai_messages_conversation_created', 'conversation_id', 'created_at'),
+    )
+

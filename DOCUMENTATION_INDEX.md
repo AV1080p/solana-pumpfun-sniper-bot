@@ -64,6 +64,11 @@ This document provides an overview of all available documentation for the Touris
 - **Backend**: [Backend Core Logic - Communication Services](./backend/CORE_LOGIC.md#communication-services)
 - **Frontend**: [Frontend Core Logic - Component Architecture](./frontend/CORE_LOGIC.md#component-architecture)
 
+### Support System
+- **Backend**: [Support System Documentation](./backend/SUPPORT_SYSTEM.md)
+- **Summary**: [Support System Implementation Summary](./SUPPORT_SYSTEM_SUMMARY.md)
+- **Features**: AI Assistant, Human Support, Self-Service (FAQ, Tutorials)
+
 ---
 
 ## 🎯 Documentation by Role

@@ -559,3 +559,171 @@ class TranslationRequest(BaseModel):
     target_language: str  # ISO language code
     source_language: Optional[str] = None
 
+# ========== SUPPORT SYSTEM SCHEMAS ==========
+
+class SupportTicketCreateRequest(BaseModel):
+    subject: str
+    description: str
+    category: str  # technical, billing, booking, general, emergency
+    priority: Optional[str] = "normal"
+    language: Optional[str] = "en"
+
+class SupportTicketSchema(BaseModel):
+    id: int
+    ticket_number: str
+    user_id: Optional[int] = None
+    user_email: str
+    subject: str
+    description: str
+    category: str
+    priority: str
+    status: str
+    assigned_to: Optional[int] = None
+    language: str
+    resolution: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class SupportMessageCreateRequest(BaseModel):
+    ticket_id: int
+    content: str
+    attachments: Optional[List[str]] = None
+
+class SupportMessageSchema(BaseModel):
+    id: int
+    ticket_id: int
+    sender_id: Optional[int] = None
+    sender_email: str
+    sender_type: str
+    content: str
+    is_internal: bool
+    attachments: Optional[List[str]] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class SupportTicketUpdateRequest(BaseModel):
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    assigned_to: Optional[int] = None
+    resolution: Optional[str] = None
+
+class FAQSchema(BaseModel):
+    id: int
+    category: str
+    question: str
+    answer: str
+    language: str
+    order: int
+    view_count: int
+    helpful_count: int
+    not_helpful_count: int
+    tags: Optional[List[str]] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class FAQCreateRequest(BaseModel):
+    category: str
+    question: str
+    answer: str
+    language: Optional[str] = "en"
+    order: Optional[int] = 0
+    tags: Optional[List[str]] = None
+
+class FAQUpdateRequest(BaseModel):
+    category: Optional[str] = None
+    question: Optional[str] = None
+    answer: Optional[str] = None
+    language: Optional[str] = None
+    order: Optional[int] = None
+    is_published: Optional[bool] = None
+    tags: Optional[List[str]] = None
+
+class FAQFeedbackRequest(BaseModel):
+    faq_id: int
+    helpful: bool  # True if helpful, False if not helpful
+
+class TutorialSchema(BaseModel):
+    id: int
+    title: str
+    description: Optional[str] = None
+    category: str
+    video_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    language: str
+    order: int
+    view_count: int
+    tags: Optional[List[str]] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class TutorialCreateRequest(BaseModel):
+    title: str
+    description: Optional[str] = None
+    category: str
+    video_url: Optional[str] = None
+    thumbnail_url: Optional[str] = None
+    duration_seconds: Optional[int] = None
+    language: Optional[str] = "en"
+    order: Optional[int] = 0
+    tags: Optional[List[str]] = None
+
+class SupportAgentSchema(BaseModel):
+    id: int
+    user_id: int
+    languages: List[str]
+    specialties: Optional[List[str]] = None
+    availability_status: str
+    rating: float
+    total_resolved: int
+    response_time_avg: Optional[float] = None
+    
+    class Config:
+        from_attributes = True
+
+class LocalSupportSchema(BaseModel):
+    id: int
+    location: str
+    country: str
+    city: str
+    address: str
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    languages: List[str]
+    services: Optional[List[str]] = None
+    availability_hours: Optional[dict] = None
+    coordinates_lat: Optional[float] = None
+    coordinates_lng: Optional[float] = None
+    
+    class Config:
+        from_attributes = True
+
+class AISupportRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    context: Optional[dict] = None
+
+class AISupportResponse(BaseModel):
+    success: bool
+    message: str
+    session_id: str
+    suggestions: Optional[List[str]] = None
+    suggested_faqs: Optional[List[int]] = None
+    escalate_to_human: Optional[bool] = False
+    confidence_score: Optional[float] = None
+
+class SupportTicketSearchRequest(BaseModel):
+    query: str
+    category: Optional[str] = None
+    language: Optional[str] = "en"
+
