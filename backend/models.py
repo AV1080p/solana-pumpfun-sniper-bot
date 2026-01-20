@@ -96,6 +96,15 @@ class User(Base):
     mfa_devices = relationship("MFADevice", back_populates="user", cascade="all, delete-orphan")
     invitations = relationship("Invitation", back_populates="invited_by_user", foreign_keys="Invitation.invited_by")
     user_permissions = relationship("UserPermission", back_populates="user", cascade="all, delete-orphan")
+    # Communication relationships
+    chat_rooms_created = relationship("ChatRoom", foreign_keys="ChatRoom.created_by", cascade="all, delete-orphan")
+    chat_participations = relationship("ChatParticipant", back_populates="user", cascade="all, delete-orphan")
+    messages_sent = relationship("Message", back_populates="sender", cascade="all, delete-orphan")
+    ai_conversations = relationship("AIConversation", back_populates="user", cascade="all, delete-orphan")
+    calls_initiated = relationship("CallSession", foreign_keys="CallSession.initiator_id", cascade="all, delete-orphan")
+    calls_received = relationship("CallSession", foreign_keys="CallSession.recipient_id")
+    forum_posts = relationship("ForumPost", back_populates="author", cascade="all, delete-orphan")
+    forum_replies = relationship("ForumReply", back_populates="author", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index('idx_users_email', 'email'),
@@ -485,5 +494,265 @@ class OIDCProvider(Base):
     
     __table_args__ = (
         Index('idx_oidc_active', 'is_active'),
+    )
+
+class AuditLog(Base):
+    """Audit log for tracking all admin and system activities"""
+    __tablename__ = "audit_logs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    action = Column(String(100), nullable=False, index=True)  # e.g., "user.create", "booking.update", "payment.refund"
+    resource_type = Column(String(50), nullable=False, index=True)  # e.g., "user", "booking", "payment"
+    resource_id = Column(Integer, nullable=True, index=True)  # ID of the affected resource
+    description = Column(Text, nullable=True)  # Human-readable description
+    ip_address = Column(String(45), nullable=True)  # IPv4 or IPv6
+    user_agent = Column(String(500), nullable=True)
+    metadata = Column(Text, nullable=True)  # JSON string for additional data
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    user = relationship("User")
+    
+    __table_args__ = (
+        Index('idx_audit_user_action', 'user_id', 'action'),
+        Index('idx_audit_resource', 'resource_type', 'resource_id'),
+        Index('idx_audit_created_at', 'created_at'),
+    )
+
+# ========== COMMUNICATION MODELS ==========
+
+class ChatRoom(Base):
+    """Chat rooms for conversations between users and providers"""
+    __tablename__ = "chat_rooms"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    room_type = Column(String(50), nullable=False, index=True)  # "user_provider", "user_guide", "group"
+    name = Column(String(255), nullable=True)  # For group chats
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    provider_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)  # For provider chats
+    guide_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)  # For guide chats
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    creator = relationship("User", foreign_keys=[created_by])
+    provider = relationship("User", foreign_keys=[provider_id])
+    guide = relationship("User", foreign_keys=[guide_id])
+    messages = relationship("Message", back_populates="room", cascade="all, delete-orphan")
+    participants = relationship("ChatParticipant", back_populates="room", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_chat_room_type', 'room_type'),
+        Index('idx_chat_room_provider', 'provider_id'),
+    )
+
+class ChatParticipant(Base):
+    """Participants in chat rooms"""
+    __tablename__ = "chat_participants"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    room_id = Column(Integer, ForeignKey("chat_rooms.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    last_read_at = Column(DateTime(timezone=True), nullable=True)
+    joined_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    
+    room = relationship("ChatRoom", back_populates="participants")
+    user = relationship("User")
+    
+    __table_args__ = (
+        Index('idx_chat_participant_room_user', 'room_id', 'user_id', unique=True),
+    )
+
+class Message(Base):
+    """Individual messages in chat rooms"""
+    __tablename__ = "messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    room_id = Column(Integer, ForeignKey("chat_rooms.id", ondelete="CASCADE"), nullable=False, index=True)
+    sender_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    content = Column(Text, nullable=False)
+    message_type = Column(String(50), default="text", nullable=False)  # text, image, file, system
+    translated_content = Column(Text, nullable=True)  # Translated version
+    original_language = Column(String(10), nullable=True)  # ISO language code
+    translated_language = Column(String(10), nullable=True)  # ISO language code
+    is_read = Column(Boolean, default=False, nullable=False, index=True)
+    read_at = Column(DateTime(timezone=True), nullable=True)
+    metadata = Column(Text, nullable=True)  # JSON for file URLs, etc.
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    room = relationship("ChatRoom", back_populates="messages")
+    sender = relationship("User")
+    
+    __table_args__ = (
+        Index('idx_messages_room_created', 'room_id', 'created_at'),
+        Index('idx_messages_unread', 'room_id', 'is_read'),
+    )
+
+class AIConversation(Base):
+    """AI chatbot conversations"""
+    __tablename__ = "ai_conversations"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    session_id = Column(String(255), unique=True, nullable=False, index=True)
+    context = Column(Text, nullable=True)  # JSON for conversation context
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("User")
+    messages = relationship("AIMessage", back_populates="conversation", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_ai_conversation_user', 'user_id', 'created_at'),
+    )
+
+class AIMessage(Base):
+    """Messages in AI conversations"""
+    __tablename__ = "ai_messages"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("ai_conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(20), nullable=False, index=True)  # user, assistant, system
+    content = Column(Text, nullable=False)
+    metadata = Column(Text, nullable=True)  # JSON for additional data
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    conversation = relationship("AIConversation", back_populates="messages")
+    
+    __table_args__ = (
+        Index('idx_ai_messages_conversation_created', 'conversation_id', 'created_at'),
+    )
+
+class CallSession(Base):
+    """Voice/video call sessions"""
+    __tablename__ = "call_sessions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    call_type = Column(String(20), nullable=False, index=True)  # voice, video
+    initiator_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    recipient_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    guide_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    room_id = Column(Integer, ForeignKey("chat_rooms.id", ondelete="SET NULL"), nullable=True, index=True)
+    session_id = Column(String(255), unique=True, nullable=False, index=True)  # WebRTC session ID
+    status = Column(String(20), default="initiated", nullable=False, index=True)  # initiated, ringing, active, ended, failed
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    duration_seconds = Column(Integer, nullable=True)
+    recording_url = Column(String(500), nullable=True)
+    metadata = Column(Text, nullable=True)  # JSON for call metadata
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    initiator = relationship("User", foreign_keys=[initiator_id])
+    recipient = relationship("User", foreign_keys=[recipient_id])
+    guide = relationship("User", foreign_keys=[guide_id])
+    room = relationship("ChatRoom")
+    
+    __table_args__ = (
+        Index('idx_call_sessions_status', 'status', 'created_at'),
+    )
+
+class BroadcastAlert(Base):
+    """Broadcast alerts for emergencies and announcements"""
+    __tablename__ = "broadcast_alerts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    alert_type = Column(String(50), nullable=False, index=True)  # emergency, announcement, maintenance, info
+    priority = Column(String(20), default="normal", nullable=False, index=True)  # low, normal, high, critical
+    title = Column(String(255), nullable=False)
+    message = Column(Text, nullable=False)
+    target_audience = Column(String(50), default="all", nullable=False)  # all, users, providers, guides, specific
+    target_user_ids = Column(Text, nullable=True)  # JSON array of user IDs for specific targeting
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)
+    created_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    creator = relationship("User", foreign_keys=[created_by])
+    views = relationship("BroadcastView", back_populates="alert", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_broadcast_active_expires', 'is_active', 'expires_at'),
+    )
+
+class BroadcastView(Base):
+    """Track which users have viewed broadcast alerts"""
+    __tablename__ = "broadcast_views"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    alert_id = Column(Integer, ForeignKey("broadcast_alerts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    viewed_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    alert = relationship("BroadcastAlert", back_populates="views")
+    user = relationship("User")
+    
+    __table_args__ = (
+        Index('idx_broadcast_view_alert_user', 'alert_id', 'user_id', unique=True),
+    )
+
+class ForumCategory(Base):
+    """Forum categories"""
+    __tablename__ = "forum_categories"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False, unique=True, index=True)
+    description = Column(Text, nullable=True)
+    slug = Column(String(255), unique=True, nullable=False, index=True)
+    order = Column(Integer, default=0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    
+    posts = relationship("ForumPost", back_populates="category", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_forum_category_active', 'is_active', 'order'),
+    )
+
+class ForumPost(Base):
+    """Forum posts/threads"""
+    __tablename__ = "forum_posts"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    category_id = Column(Integer, ForeignKey("forum_categories.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    title = Column(String(500), nullable=False, index=True)
+    content = Column(Text, nullable=False)
+    slug = Column(String(500), nullable=True, index=True)
+    is_pinned = Column(Boolean, default=False, nullable=False, index=True)
+    is_locked = Column(Boolean, default=False, nullable=False)
+    view_count = Column(Integer, default=0, nullable=False)
+    reply_count = Column(Integer, default=0, nullable=False)
+    last_reply_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    category = relationship("ForumCategory", back_populates="posts")
+    author = relationship("User")
+    replies = relationship("ForumReply", back_populates="post", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_forum_post_category_created', 'category_id', 'created_at'),
+        Index('idx_forum_post_pinned', 'is_pinned', 'created_at'),
+    )
+
+class ForumReply(Base):
+    """Forum post replies"""
+    __tablename__ = "forum_replies"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    post_id = Column(Integer, ForeignKey("forum_posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    parent_reply_id = Column(Integer, ForeignKey("forum_replies.id", ondelete="SET NULL"), nullable=True)  # For nested replies
+    content = Column(Text, nullable=False)
+    is_solution = Column(Boolean, default=False, nullable=False)  # Marked as solution
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    post = relationship("ForumPost", back_populates="replies")
+    author = relationship("User")
+    parent_reply = relationship("ForumReply", remote_side=[id])
+    
+    __table_args__ = (
+        Index('idx_forum_reply_post_created', 'post_id', 'created_at'),
     )
 

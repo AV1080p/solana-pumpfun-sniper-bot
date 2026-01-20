@@ -1,5 +1,5 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 class TourSchema(BaseModel):
@@ -302,4 +302,260 @@ class PermissionCreateRequest(BaseModel):
     resource: str
     action: str
     description: Optional[str] = None
+
+# ========== ADMIN DASHBOARD SCHEMAS ==========
+
+class AdminAnalyticsResponse(BaseModel):
+    total_users: int
+    total_bookings: int
+    total_revenue: float
+    total_payments: int
+    active_users_30d: int
+    new_users_30d: int
+    revenue_by_month: dict
+    bookings_by_status: dict
+    payments_by_method: dict
+    top_tours: list
+    recent_activity: list
+
+class UserUpdateRequest(BaseModel):
+    email: Optional[str] = None
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    role: Optional[str] = None
+    is_active: Optional[bool] = None
+    is_verified: Optional[bool] = None
+
+class UserListResponse(BaseModel):
+    id: int
+    email: str
+    username: Optional[str] = None
+    full_name: Optional[str] = None
+    role: str
+    is_active: bool
+    is_verified: bool
+    created_at: datetime
+    last_login: Optional[datetime] = None
+    total_bookings: int = 0
+    total_spent: float = 0.0
+
+    class Config:
+        from_attributes = True
+
+class BillingSummaryResponse(BaseModel):
+    total_revenue: float
+    revenue_this_month: float
+    revenue_last_month: float
+    pending_payments: float
+    failed_payments: float
+    refunded_amount: float
+    revenue_by_payment_method: dict
+    invoices_summary: dict
+
+class UsageReportRequest(BaseModel):
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    report_type: str = "summary"  # summary, detailed, export
+
+class SystemHealthResponse(BaseModel):
+    status: str
+    database: dict
+    api: dict
+    services: dict
+    uptime: float
+    timestamp: datetime
+
+class AuditLogResponse(BaseModel):
+    id: int
+    user_id: Optional[int] = None
+    user_email: Optional[str] = None
+    action: str
+    resource_type: str
+    resource_id: Optional[int] = None
+    description: Optional[str] = None
+    ip_address: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class AuditLogFilterRequest(BaseModel):
+    user_id: Optional[int] = None
+    action: Optional[str] = None
+    resource_type: Optional[str] = None
+    start_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None
+    limit: Optional[int] = 100
+    offset: Optional[int] = 0
+
+# ========== COMMUNICATION SCHEMAS ==========
+
+class ChatRoomSchema(BaseModel):
+    id: int
+    room_type: str
+    name: Optional[str] = None
+    provider_id: Optional[int] = None
+    guide_id: Optional[int] = None
+    is_active: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class MessageSchema(BaseModel):
+    id: int
+    room_id: int
+    sender_id: Optional[int] = None
+    sender_email: Optional[str] = None
+    content: str
+    message_type: str
+    translated_content: Optional[str] = None
+    original_language: Optional[str] = None
+    translated_language: Optional[str] = None
+    is_read: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class MessageCreateRequest(BaseModel):
+    room_id: int
+    content: str
+    message_type: Optional[str] = "text"
+    translate_to: Optional[str] = None  # ISO language code
+
+class ChatRoomCreateRequest(BaseModel):
+    room_type: str  # "user_provider", "user_guide"
+    provider_id: Optional[int] = None
+    guide_id: Optional[int] = None
+    name: Optional[str] = None
+
+class AIConversationSchema(BaseModel):
+    id: int
+    user_id: int
+    session_id: str
+    created_at: datetime
+    updated_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class AIMessageSchema(BaseModel):
+    id: int
+    conversation_id: int
+    role: str
+    content: str
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class AIChatRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+    context: Optional[dict] = None
+
+class CallSessionSchema(BaseModel):
+    id: int
+    call_type: str
+    initiator_id: Optional[int] = None
+    recipient_id: Optional[int] = None
+    guide_id: Optional[int] = None
+    session_id: str
+    status: str
+    started_at: Optional[datetime] = None
+    ended_at: Optional[datetime] = None
+    duration_seconds: Optional[int] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class CallInitiateRequest(BaseModel):
+    call_type: str  # "voice", "video"
+    recipient_id: Optional[int] = None
+    guide_id: Optional[int] = None
+    room_id: Optional[int] = None
+
+class BroadcastAlertSchema(BaseModel):
+    id: int
+    alert_type: str
+    priority: str
+    title: str
+    message: str
+    target_audience: str
+    is_active: bool
+    expires_at: Optional[datetime] = None
+    created_at: datetime
+    viewed: Optional[bool] = False
+    
+    class Config:
+        from_attributes = True
+
+class BroadcastCreateRequest(BaseModel):
+    alert_type: str  # emergency, announcement, maintenance, info
+    priority: str  # low, normal, high, critical
+    title: str
+    message: str
+    target_audience: str  # all, users, providers, guides
+    target_user_ids: Optional[List[int]] = None
+    expires_at: Optional[datetime] = None
+
+class ForumCategorySchema(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    slug: str
+    order: int
+    is_active: bool
+    post_count: Optional[int] = 0
+    
+    class Config:
+        from_attributes = True
+
+class ForumPostSchema(BaseModel):
+    id: int
+    category_id: int
+    author_id: Optional[int] = None
+    author_email: Optional[str] = None
+    title: str
+    content: str
+    slug: Optional[str] = None
+    is_pinned: bool
+    is_locked: bool
+    view_count: int
+    reply_count: int
+    last_reply_at: Optional[datetime] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class ForumPostCreateRequest(BaseModel):
+    category_id: int
+    title: str
+    content: str
+
+class ForumReplySchema(BaseModel):
+    id: int
+    post_id: int
+    author_id: Optional[int] = None
+    author_email: Optional[str] = None
+    parent_reply_id: Optional[int] = None
+    content: str
+    is_solution: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class ForumReplyCreateRequest(BaseModel):
+    post_id: int
+    content: str
+    parent_reply_id: Optional[int] = None
+
+class TranslationRequest(BaseModel):
+    text: str
+    target_language: str  # ISO language code
+    source_language: Optional[str] = None
 

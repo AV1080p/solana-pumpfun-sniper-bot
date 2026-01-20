@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Depends, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from typing import List, Optional
 from fastapi import Query
 import os
@@ -11,7 +12,10 @@ from dotenv import load_dotenv
 logger = logging.getLogger(__name__)
 
 from database import SessionLocal, engine, Base
-from models import Tour, Booking, Payment, User, Invoice, Feedback, DataConsent, DataRetentionLog, BackupRecord
+from models import (
+    Tour, Booking, Payment, User, Invoice, Feedback, DataConsent, DataRetentionLog, BackupRecord, AuditLog,
+    ForumPost, ForumReply
+)
 from schemas import (
     TourSchema, BookingSchema, PaymentSchema, PaymentRequest,
     PaymentIntentRequest, PaymentIntentResponse, CryptoPaymentRequest,
@@ -27,7 +31,16 @@ from schemas import (
     RefreshTokenRequest, SessionRevokeRequest,
     InvitationCreateRequest, InvitationAcceptRequest,
     SAMLInitiateRequest, OIDCInitiateRequest,
-    PermissionGrantRequest, PermissionRevokeRequest, PermissionCreateRequest
+    PermissionGrantRequest, PermissionRevokeRequest, PermissionCreateRequest,
+    AdminAnalyticsResponse, UserUpdateRequest, UserListResponse,
+    BillingSummaryResponse, UsageReportRequest, SystemHealthResponse,
+    AuditLogResponse, AuditLogFilterRequest,
+    ChatRoomSchema, MessageSchema, MessageCreateRequest, ChatRoomCreateRequest,
+    AIConversationSchema, AIMessageSchema, AIChatRequest,
+    CallSessionSchema, CallInitiateRequest,
+    BroadcastAlertSchema, BroadcastCreateRequest,
+    ForumCategorySchema, ForumPostSchema, ForumPostCreateRequest,
+    ForumReplySchema, ForumReplyCreateRequest, TranslationRequest
 )
 from services.payment_service import PaymentService
 from services.solana_service import SolanaService
@@ -42,6 +55,7 @@ from services.invitation_service import InvitationService
 from services.saml_service import SAMLService
 from services.oidc_service import OIDCService
 from services.rbac_service import RBACService
+from services.communication_service import CommunicationService
 from auth import get_current_user, get_current_active_user, get_current_admin_user, get_optional_user
 from models import User, UserRole
 
@@ -145,7 +159,7 @@ async def login(
 async def login_mfa_verify(
     request_data: MFAVerifyRequest,
     user_id: int = Query(...),
-    request: Request = None,
+    request: Request,
     db: Session = Depends(get_db)
 ):
     """Verify MFA code after initial login"""
@@ -161,14 +175,14 @@ async def login_mfa_verify(
     
     # Create session after MFA verification
     session_service = SessionService()
-    device_info = request.headers.get("User-Agent", "Unknown") if request else "Unknown"
-    ip_address = request.client.host if request and request.client else None
+    device_info = request.headers.get("User-Agent", "Unknown")
+    ip_address = request.client.host if request.client else None
     
     session_result = await session_service.create_session(
         user=user,
         device_info=device_info,
         ip_address=ip_address,
-        user_agent=request.headers.get("User-Agent") if request else None,
+        user_agent=request.headers.get("User-Agent"),
         db=db
     )
     
@@ -1472,6 +1486,959 @@ async def generate_encryption_key(
         "encryption_key": key,
         "message": "Add this key to your .env file as ENCRYPTION_KEY",
         "warning": "Keep this key secure and never commit it to version control!"
+    }
+
+# ========== ADMIN DASHBOARD ENDPOINTS ==========
+
+def create_audit_log(
+    db: Session,
+    user_id: Optional[int],
+    action: str,
+    resource_type: str,
+    resource_id: Optional[int] = None,
+    description: Optional[str] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    metadata: Optional[dict] = None
+):
+    """Helper function to create audit log entries"""
+    import json
+    audit = AuditLog(
+        user_id=user_id,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        description=description,
+        ip_address=ip_address,
+        user_agent=user_agent,
+        metadata=json.dumps(metadata) if metadata else None
+    )
+    db.add(audit)
+    db.commit()
+
+@app.get("/admin/analytics", response_model=AdminAnalyticsResponse)
+async def get_admin_analytics(
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get real-time analytics for admin dashboard"""
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    from sqlalchemy import func, and_
+    
+    # Total counts
+    total_users = db.query(func.count(User.id)).scalar()
+    total_bookings = db.query(func.count(Booking.id)).scalar()
+    total_payments = db.query(func.count(Payment.id)).scalar()
+    
+    # Revenue calculations
+    completed_payments = db.query(Payment).filter(Payment.status == "completed").all()
+    total_revenue = sum(p.amount for p in completed_payments)
+    
+    # Active users (logged in last 30 days)
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    active_users_30d = db.query(func.count(User.id)).filter(
+        User.last_login >= thirty_days_ago
+    ).scalar()
+    
+    # New users (last 30 days)
+    new_users_30d = db.query(func.count(User.id)).filter(
+        User.created_at >= thirty_days_ago
+    ).scalar()
+    
+    # Revenue by month (last 6 months)
+    revenue_by_month = defaultdict(float)
+    six_months_ago = datetime.utcnow() - timedelta(days=180)
+    recent_payments = db.query(Payment).filter(
+        and_(Payment.status == "completed", Payment.created_at >= six_months_ago)
+    ).all()
+    for payment in recent_payments:
+        month_key = payment.created_at.strftime("%Y-%m")
+        revenue_by_month[month_key] += payment.amount
+    
+    # Bookings by status
+    bookings_by_status = defaultdict(int)
+    for booking in db.query(Booking).all():
+        status = booking.status.value if hasattr(booking.status, 'value') else str(booking.status)
+        bookings_by_status[status] += 1
+    
+    # Payments by method
+    payments_by_method = defaultdict(float)
+    for payment in completed_payments:
+        method = payment.payment_method.value if hasattr(payment.payment_method, 'value') else str(payment.payment_method)
+        payments_by_method[method] += payment.amount
+    
+    # Top tours by bookings
+    tour_bookings = db.query(
+        Booking.tour_id,
+        func.count(Booking.id).label('count')
+    ).group_by(Booking.tour_id).order_by(func.count(Booking.id).desc()).limit(5).all()
+    
+    top_tours = []
+    for tour_id, count in tour_bookings:
+        tour = db.query(Tour).filter(Tour.id == tour_id).first()
+        if tour:
+            top_tours.append({
+                "id": tour.id,
+                "name": tour.name,
+                "bookings_count": count
+            })
+    
+    # Recent activity (last 10 bookings)
+    recent_bookings = db.query(Booking).order_by(Booking.created_at.desc()).limit(10).all()
+    recent_activity = []
+    for booking in recent_bookings:
+        tour = db.query(Tour).filter(Tour.id == booking.tour_id).first()
+        recent_activity.append({
+            "type": "booking",
+            "description": f"New booking for {tour.name if tour else 'Tour'}" if tour else "New booking",
+            "date": booking.created_at.isoformat() if booking.created_at else None,
+            "user_email": booking.user_email
+        })
+    
+    # Log audit
+    create_audit_log(
+        db, current_user.id, "admin.analytics.view", "analytics",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return {
+        "total_users": total_users,
+        "total_bookings": total_bookings,
+        "total_revenue": total_revenue,
+        "total_payments": total_payments,
+        "active_users_30d": active_users_30d,
+        "new_users_30d": new_users_30d,
+        "revenue_by_month": dict(revenue_by_month),
+        "bookings_by_status": dict(bookings_by_status),
+        "payments_by_method": dict(payments_by_method),
+        "top_tours": top_tours,
+        "recent_activity": recent_activity
+    }
+
+@app.get("/admin/users", response_model=List[UserListResponse])
+async def list_users(
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    search: Optional[str] = None
+):
+    """List all users with statistics"""
+    from sqlalchemy import or_
+    
+    query = db.query(User)
+    
+    if search:
+        query = query.filter(
+            or_(
+                User.email.ilike(f"%{search}%"),
+                User.username.ilike(f"%{search}%"),
+                User.full_name.ilike(f"%{search}%")
+            )
+        )
+    
+    users = query.offset(skip).limit(limit).all()
+    
+    result = []
+    for user in users:
+        # Get user statistics
+        bookings_count = db.query(func.count(Booking.id)).filter(Booking.user_id == user.id).scalar()
+        payments = db.query(Payment).join(Booking).filter(Booking.user_id == user.id).filter(Payment.status == "completed").all()
+        total_spent = sum(p.amount for p in payments)
+        
+        result.append({
+            "id": user.id,
+            "email": user.email,
+            "username": user.username,
+            "full_name": user.full_name,
+            "role": user.role.value if hasattr(user.role, 'value') else str(user.role),
+            "is_active": user.is_active,
+            "is_verified": user.is_verified,
+            "created_at": user.created_at,
+            "last_login": user.last_login,
+            "total_bookings": bookings_count,
+            "total_spent": total_spent
+        })
+    
+    create_audit_log(
+        db, current_user.id, "admin.users.list", "user",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return result
+
+@app.get("/admin/users/{user_id}", response_model=UserListResponse)
+async def get_user(
+    user_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get a specific user with statistics"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    bookings_count = db.query(func.count(Booking.id)).filter(Booking.user_id == user.id).scalar()
+    payments = db.query(Payment).join(Booking).filter(Booking.user_id == user.id).filter(Payment.status == "completed").all()
+    total_spent = sum(p.amount for p in payments)
+    
+    create_audit_log(
+        db, current_user.id, "admin.users.view", "user", user_id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return {
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "full_name": user.full_name,
+        "role": user.role.value if hasattr(user.role, 'value') else str(user.role),
+        "is_active": user.is_active,
+        "is_verified": user.is_verified,
+        "created_at": user.created_at,
+        "last_login": user.last_login,
+        "total_bookings": bookings_count,
+        "total_spent": total_spent
+    }
+
+@app.patch("/admin/users/{user_id}")
+async def update_user(
+    user_id: int,
+    user_data: UserUpdateRequest,
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Update user information"""
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    update_data = user_data.dict(exclude_unset=True)
+    
+    # Handle role update
+    if "role" in update_data:
+        try:
+            update_data["role"] = UserRole[update_data["role"].upper()]
+        except KeyError:
+            raise HTTPException(status_code=400, detail="Invalid role")
+    
+    for field, value in update_data.items():
+        setattr(user, field, value)
+    
+    db.commit()
+    db.refresh(user)
+    
+    create_audit_log(
+        db, current_user.id, "admin.users.update", "user", user_id,
+        description=f"Updated user {user.email}",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent"),
+        metadata=update_data
+    )
+    
+    return {"success": True, "message": "User updated successfully", "user": user}
+
+@app.delete("/admin/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Delete a user (Admin only)"""
+    if user_id == current_user.id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    user_email = user.email
+    db.delete(user)
+    db.commit()
+    
+    create_audit_log(
+        db, current_user.id, "admin.users.delete", "user", user_id,
+        description=f"Deleted user {user_email}",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return {"success": True, "message": "User deleted successfully"}
+
+@app.get("/admin/billing", response_model=BillingSummaryResponse)
+async def get_billing_summary(
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get billing and payment summary"""
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    
+    # Total revenue
+    completed_payments = db.query(Payment).filter(Payment.status == "completed").all()
+    total_revenue = sum(p.amount for p in completed_payments)
+    
+    # Revenue this month
+    now = datetime.utcnow()
+    first_day_this_month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    payments_this_month = [p for p in completed_payments if p.created_at >= first_day_this_month]
+    revenue_this_month = sum(p.amount for p in payments_this_month)
+    
+    # Revenue last month
+    if first_day_this_month.month == 1:
+        first_day_last_month = first_day_this_month.replace(year=first_day_this_month.year - 1, month=12)
+    else:
+        first_day_last_month = first_day_this_month.replace(month=first_day_this_month.month - 1)
+    last_day_last_month = first_day_this_month - timedelta(seconds=1)
+    payments_last_month = [p for p in completed_payments if first_day_last_month <= p.created_at <= last_day_last_month]
+    revenue_last_month = sum(p.amount for p in payments_last_month)
+    
+    # Pending payments
+    pending_payments = db.query(Payment).filter(Payment.status == "pending").all()
+    pending_amount = sum(p.amount for p in pending_payments)
+    
+    # Failed payments
+    failed_payments = db.query(Payment).filter(Payment.status == "failed").all()
+    failed_amount = sum(p.amount for p in failed_payments)
+    
+    # Refunded amount
+    refunded_payments = db.query(Payment).filter(Payment.status == "refunded").all()
+    refunded_amount = sum(p.amount for p in refunded_payments)
+    
+    # Revenue by payment method
+    revenue_by_method = defaultdict(float)
+    for payment in completed_payments:
+        method = payment.payment_method.value if hasattr(payment.payment_method, 'value') else str(payment.payment_method)
+        revenue_by_method[method] += payment.amount
+    
+    # Invoice summary
+    invoices = db.query(Invoice).all()
+    invoices_summary = {
+        "total": len(invoices),
+        "paid": len([i for i in invoices if i.status == "paid"]),
+        "pending": len([i for i in invoices if i.status == "pending"]),
+        "cancelled": len([i for i in invoices if i.status == "cancelled"])
+    }
+    
+    create_audit_log(
+        db, current_user.id, "admin.billing.view", "billing",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return {
+        "total_revenue": total_revenue,
+        "revenue_this_month": revenue_this_month,
+        "revenue_last_month": revenue_last_month,
+        "pending_payments": pending_amount,
+        "failed_payments": failed_amount,
+        "refunded_amount": refunded_amount,
+        "revenue_by_payment_method": dict(revenue_by_method),
+        "invoices_summary": invoices_summary
+    }
+
+@app.get("/admin/reports/usage")
+async def get_usage_report(
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    report_type: str = Query("summary")
+):
+    """Get usage statistics and reports"""
+    from datetime import datetime, timedelta
+    from collections import defaultdict
+    
+    if not start_date:
+        start_date = datetime.utcnow() - timedelta(days=30)
+    if not end_date:
+        end_date = datetime.utcnow()
+    
+    # User registrations over time
+    users = db.query(User).filter(
+        User.created_at >= start_date,
+        User.created_at <= end_date
+    ).all()
+    
+    # Bookings over time
+    bookings = db.query(Booking).filter(
+        Booking.created_at >= start_date,
+        Booking.created_at <= end_date
+    ).all()
+    
+    # Payments over time
+    payments = db.query(Payment).filter(
+        Payment.created_at >= start_date,
+        Payment.created_at <= end_date
+    ).all()
+    
+    # Daily statistics
+    daily_stats = defaultdict(lambda: {
+        "users": 0,
+        "bookings": 0,
+        "payments": 0,
+        "revenue": 0.0
+    })
+    
+    for user in users:
+        day_key = user.created_at.strftime("%Y-%m-%d")
+        daily_stats[day_key]["users"] += 1
+    
+    for booking in bookings:
+        day_key = booking.created_at.strftime("%Y-%m-%d")
+        daily_stats[day_key]["bookings"] += 1
+    
+    for payment in payments:
+        day_key = payment.created_at.strftime("%Y-%m-%d")
+        daily_stats[day_key]["payments"] += 1
+        if payment.status == "completed":
+            daily_stats[day_key]["revenue"] += payment.amount
+    
+    create_audit_log(
+        db, current_user.id, "admin.reports.view", "report",
+        description=f"Viewed usage report: {report_type}",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return {
+        "success": True,
+        "period": {
+            "start_date": start_date.isoformat(),
+            "end_date": end_date.isoformat()
+        },
+        "summary": {
+            "total_users": len(users),
+            "total_bookings": len(bookings),
+            "total_payments": len(payments),
+            "total_revenue": sum(p.amount for p in payments if p.status == "completed")
+        },
+        "daily_stats": dict(daily_stats)
+    }
+
+@app.get("/admin/health", response_model=SystemHealthResponse)
+async def get_system_health(
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Get system health monitoring data"""
+    from datetime import datetime
+    import time
+    from database import check_database_connection
+    from db_utils import DatabaseManager
+    
+    start_time = time.time()
+    
+    # Database health
+    db_healthy = check_database_connection()
+    db_manager = DatabaseManager()
+    db_stats = db_manager.get_connection_pool_stats()
+    table_stats = db_manager.get_table_stats()
+    
+    # API health (basic check)
+    api_healthy = True
+    try:
+        # Simple query to test API
+        db.query(User).limit(1).all()
+    except:
+        api_healthy = False
+    
+    # Services health
+    services_health = {
+        "database": "healthy" if db_healthy else "unhealthy",
+        "api": "healthy" if api_healthy else "unhealthy",
+        "payment_service": "healthy",  # Could check actual service status
+        "auth_service": "healthy"
+    }
+    
+    overall_status = "healthy" if (db_healthy and api_healthy) else "degraded"
+    
+    create_audit_log(
+        db, current_user.id, "admin.health.view", "system",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return {
+        "status": overall_status,
+        "database": {
+            "connected": db_healthy,
+            "pool_stats": db_stats,
+            "table_stats": table_stats
+        },
+        "api": {
+            "status": "healthy" if api_healthy else "unhealthy",
+            "response_time_ms": (time.time() - start_time) * 1000
+        },
+        "services": services_health,
+        "uptime": time.time() - start_time,  # Simplified - should track actual uptime
+        "timestamp": datetime.utcnow()
+    }
+
+@app.get("/admin/audit-logs", response_model=List[AuditLogResponse])
+async def get_audit_logs(
+    request: Request,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db),
+    user_id: Optional[int] = Query(None),
+    action: Optional[str] = Query(None),
+    resource_type: Optional[str] = Query(None),
+    start_date: Optional[datetime] = Query(None),
+    end_date: Optional[datetime] = Query(None),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0)
+):
+    """Get audit logs with filtering"""
+    from sqlalchemy import and_
+    
+    query = db.query(AuditLog)
+    
+    if user_id:
+        query = query.filter(AuditLog.user_id == user_id)
+    if action:
+        query = query.filter(AuditLog.action.ilike(f"%{action}%"))
+    if resource_type:
+        query = query.filter(AuditLog.resource_type == resource_type)
+    if start_date:
+        query = query.filter(AuditLog.created_at >= start_date)
+    if end_date:
+        query = query.filter(AuditLog.created_at <= end_date)
+    
+    logs = query.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit).all()
+    
+    result = []
+    for log in logs:
+        user_email = None
+        if log.user_id:
+            user = db.query(User).filter(User.id == log.user_id).first()
+            if user:
+                user_email = user.email
+        
+        result.append({
+            "id": log.id,
+            "user_id": log.user_id,
+            "user_email": user_email,
+            "action": log.action,
+            "resource_type": log.resource_type,
+            "resource_id": log.resource_id,
+            "description": log.description,
+            "ip_address": log.ip_address,
+            "created_at": log.created_at
+        })
+    
+    create_audit_log(
+        db, current_user.id, "admin.audit.view", "audit_log",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("User-Agent")
+    )
+    
+    return result
+
+# ========== COMMUNICATION ENDPOINTS ==========
+
+@app.post("/communication/chat/rooms", response_model=ChatRoomSchema)
+async def create_chat_room(
+    request_data: ChatRoomCreateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Create a new chat room"""
+    comm_service = CommunicationService()
+    result = await comm_service.create_chat_room(
+        room_type=request_data.room_type,
+        user_id=current_user.id,
+        provider_id=request_data.provider_id,
+        guide_id=request_data.guide_id,
+        name=request_data.name,
+        db=db
+    )
+    return result["room"]
+
+@app.get("/communication/chat/rooms", response_model=List[ChatRoomSchema])
+async def get_chat_rooms(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get all chat rooms for current user"""
+    comm_service = CommunicationService()
+    rooms = await comm_service.get_user_chat_rooms(current_user.id, db)
+    return rooms
+
+@app.post("/communication/chat/messages", response_model=MessageSchema)
+async def send_message(
+    request_data: MessageCreateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Send a message in a chat room"""
+    comm_service = CommunicationService()
+    result = await comm_service.send_message(
+        room_id=request_data.room_id,
+        sender_id=current_user.id,
+        content=request_data.content,
+        message_type=request_data.message_type,
+        translate_to=request_data.translate_to,
+        db=db
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    
+    message = result["message"]
+    # Add sender email
+    sender = db.query(User).filter(User.id == message.sender_id).first()
+    return {
+        "id": message.id,
+        "room_id": message.room_id,
+        "sender_id": message.sender_id,
+        "sender_email": sender.email if sender else None,
+        "content": message.content,
+        "message_type": message.message_type,
+        "translated_content": message.translated_content,
+        "original_language": message.original_language,
+        "translated_language": message.translated_language,
+        "is_read": message.is_read,
+        "created_at": message.created_at
+    }
+
+@app.get("/communication/chat/rooms/{room_id}/messages", response_model=List[MessageSchema])
+async def get_messages(
+    room_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0)
+):
+    """Get messages from a chat room"""
+    comm_service = CommunicationService()
+    result = await comm_service.get_messages(room_id, current_user.id, limit, offset, db)
+    if not result.get("success"):
+        raise HTTPException(status_code=403, detail=result.get("error"))
+    
+    messages = result["messages"]
+    # Add sender emails
+    result_messages = []
+    for msg in messages:
+        sender = db.query(User).filter(User.id == msg.sender_id).first() if msg.sender_id else None
+        result_messages.append({
+            "id": msg.id,
+            "room_id": msg.room_id,
+            "sender_id": msg.sender_id,
+            "sender_email": sender.email if sender else None,
+            "content": msg.content,
+            "message_type": msg.message_type,
+            "translated_content": msg.translated_content,
+            "original_language": msg.original_language,
+            "translated_language": msg.translated_language,
+            "is_read": msg.is_read,
+            "created_at": msg.created_at
+        })
+    return result_messages
+
+@app.post("/communication/ai/chat")
+async def ai_chat(
+    request_data: AIChatRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Send a message to AI chatbot"""
+    comm_service = CommunicationService()
+    result = await comm_service.send_ai_message(
+        message=request_data.message,
+        session_id=request_data.session_id,
+        user_id=current_user.id,
+        context=request_data.context,
+        db=db
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    return result
+
+@app.get("/communication/ai/conversations/{session_id}", response_model=List[AIMessageSchema])
+async def get_ai_conversation(
+    session_id: str,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get AI conversation history"""
+    comm_service = CommunicationService()
+    messages = await comm_service.get_ai_conversation_history(session_id, current_user.id, db)
+    return messages
+
+@app.post("/communication/translate")
+async def translate_text(
+    request_data: TranslationRequest,
+    current_user: User = Depends(get_current_active_user)
+):
+    """Translate text to target language"""
+    comm_service = CommunicationService()
+    result = await comm_service.translate_text(
+        text=request_data.text,
+        target_language=request_data.target_language,
+        source_language=request_data.source_language
+    )
+    return result
+
+@app.post("/communication/calls/initiate", response_model=CallSessionSchema)
+async def initiate_call(
+    request_data: CallInitiateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Initiate a voice or video call"""
+    comm_service = CommunicationService()
+    result = await comm_service.initiate_call(
+        call_type=request_data.call_type,
+        initiator_id=current_user.id,
+        recipient_id=request_data.recipient_id,
+        guide_id=request_data.guide_id,
+        room_id=request_data.room_id,
+        db=db
+    )
+    return result["call"]
+
+@app.patch("/communication/calls/{session_id}/status", response_model=CallSessionSchema)
+async def update_call_status(
+    session_id: str,
+    status: str = Query(...),
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Update call status"""
+    comm_service = CommunicationService()
+    result = await comm_service.update_call_status(session_id, status, db)
+    if not result.get("success"):
+        raise HTTPException(status_code=404, detail=result.get("error"))
+    return result["call"]
+
+@app.post("/communication/broadcasts", response_model=BroadcastAlertSchema)
+async def create_broadcast(
+    request_data: BroadcastCreateRequest,
+    current_user: User = Depends(get_current_admin_user),
+    db: Session = Depends(get_db)
+):
+    """Create a broadcast alert (Admin only)"""
+    comm_service = CommunicationService()
+    result = await comm_service.create_broadcast(
+        alert_type=request_data.alert_type,
+        priority=request_data.priority,
+        title=request_data.title,
+        message=request_data.message,
+        target_audience=request_data.target_audience,
+        target_user_ids=request_data.target_user_ids,
+        expires_at=request_data.expires_at,
+        created_by=current_user.id,
+        db=db
+    )
+    return result["alert"]
+
+@app.get("/communication/broadcasts", response_model=List[BroadcastAlertSchema])
+async def get_broadcasts(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Get active broadcast alerts for current user"""
+    comm_service = CommunicationService()
+    alerts = await comm_service.get_active_broadcasts(
+        user_id=current_user.id,
+        user_role=current_user.role.value if hasattr(current_user.role, 'value') else str(current_user.role),
+        db=db
+    )
+    return alerts
+
+@app.post("/communication/broadcasts/{alert_id}/view")
+async def mark_broadcast_viewed(
+    alert_id: int,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Mark a broadcast alert as viewed"""
+    comm_service = CommunicationService()
+    result = await comm_service.mark_broadcast_viewed(alert_id, current_user.id, db)
+    return result
+
+@app.get("/communication/forums/categories", response_model=List[ForumCategorySchema])
+async def get_forum_categories(db: Session = Depends(get_db)):
+    """Get all forum categories"""
+    comm_service = CommunicationService()
+    categories = await comm_service.get_forum_categories(db)
+    # Add post count
+    from sqlalchemy import func
+    result = []
+    for cat in categories:
+        post_count = db.query(func.count(ForumPost.id)).filter(
+            ForumPost.category_id == cat.id
+        ).scalar()
+        result.append({
+            "id": cat.id,
+            "name": cat.name,
+            "description": cat.description,
+            "slug": cat.slug,
+            "order": cat.order,
+            "is_active": cat.is_active,
+            "post_count": post_count
+        })
+    return result
+
+@app.post("/communication/forums/posts", response_model=ForumPostSchema)
+async def create_forum_post(
+    request_data: ForumPostCreateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Create a forum post"""
+    comm_service = CommunicationService()
+    result = await comm_service.create_forum_post(
+        category_id=request_data.category_id,
+        author_id=current_user.id,
+        title=request_data.title,
+        content=request_data.content,
+        db=db
+    )
+    post = result["post"]
+    author = db.query(User).filter(User.id == post.author_id).first()
+    return {
+        "id": post.id,
+        "category_id": post.category_id,
+        "author_id": post.author_id,
+        "author_email": author.email if author else None,
+        "title": post.title,
+        "content": post.content,
+        "slug": post.slug,
+        "is_pinned": post.is_pinned,
+        "is_locked": post.is_locked,
+        "view_count": post.view_count,
+        "reply_count": post.reply_count,
+        "last_reply_at": post.last_reply_at,
+        "created_at": post.created_at
+    }
+
+@app.get("/communication/forums/posts", response_model=List[ForumPostSchema])
+async def get_forum_posts(
+    category_id: Optional[int] = Query(None),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: Session = Depends(get_db)
+):
+    """Get forum posts"""
+    comm_service = CommunicationService()
+    posts = await comm_service.get_forum_posts(category_id, limit, offset, db)
+    result = []
+    for post in posts:
+        author = db.query(User).filter(User.id == post.author_id).first() if post.author_id else None
+        result.append({
+            "id": post.id,
+            "category_id": post.category_id,
+            "author_id": post.author_id,
+            "author_email": author.email if author else None,
+            "title": post.title,
+            "content": post.content,
+            "slug": post.slug,
+            "is_pinned": post.is_pinned,
+            "is_locked": post.is_locked,
+            "view_count": post.view_count,
+            "reply_count": post.reply_count,
+            "last_reply_at": post.last_reply_at,
+            "created_at": post.created_at
+        })
+    return result
+
+@app.get("/communication/forums/posts/{post_id}", response_model=ForumPostSchema)
+async def get_forum_post(
+    post_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get a specific forum post"""
+    from models import ForumPost
+    post = db.query(ForumPost).filter(ForumPost.id == post_id).first()
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    
+    # Increment view count
+    post.view_count = (post.view_count or 0) + 1
+    db.commit()
+    db.refresh(post)
+    
+    author = db.query(User).filter(User.id == post.author_id).first() if post.author_id else None
+    return {
+        "id": post.id,
+        "category_id": post.category_id,
+        "author_id": post.author_id,
+        "author_email": author.email if author else None,
+        "title": post.title,
+        "content": post.content,
+        "slug": post.slug,
+        "is_pinned": post.is_pinned,
+        "is_locked": post.is_locked,
+        "view_count": post.view_count,
+        "reply_count": post.reply_count,
+        "last_reply_at": post.last_reply_at,
+        "created_at": post.created_at
+    }
+
+@app.get("/communication/forums/posts/{post_id}/replies", response_model=List[ForumReplySchema])
+async def get_forum_replies(
+    post_id: int,
+    db: Session = Depends(get_db)
+):
+    """Get replies for a forum post"""
+    from models import ForumReply
+    replies = db.query(ForumReply).filter(ForumReply.post_id == post_id).order_by(
+        ForumReply.created_at.asc()
+    ).all()
+    
+    result = []
+    for reply in replies:
+        author = db.query(User).filter(User.id == reply.author_id).first() if reply.author_id else None
+        result.append({
+            "id": reply.id,
+            "post_id": reply.post_id,
+            "author_id": reply.author_id,
+            "author_email": author.email if author else None,
+            "parent_reply_id": reply.parent_reply_id,
+            "content": reply.content,
+            "is_solution": reply.is_solution,
+            "created_at": reply.created_at
+        })
+    return result
+
+@app.post("/communication/forums/replies", response_model=ForumReplySchema)
+async def create_forum_reply(
+    request_data: ForumReplyCreateRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    """Create a forum reply"""
+    comm_service = CommunicationService()
+    result = await comm_service.create_forum_reply(
+        post_id=request_data.post_id,
+        author_id=current_user.id,
+        content=request_data.content,
+        parent_reply_id=request_data.parent_reply_id,
+        db=db
+    )
+    reply = result["reply"]
+    author = db.query(User).filter(User.id == reply.author_id).first()
+    return {
+        "id": reply.id,
+        "post_id": reply.post_id,
+        "author_id": reply.author_id,
+        "author_email": author.email if author else None,
+        "parent_reply_id": reply.parent_reply_id,
+        "content": reply.content,
+        "is_solution": reply.is_solution,
+        "created_at": reply.created_at
     }
 
 # Initialize scheduler service on startup
