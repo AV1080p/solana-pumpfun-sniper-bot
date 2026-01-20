@@ -727,3 +727,135 @@ class SupportTicketSearchRequest(BaseModel):
     category: Optional[str] = None
     language: Optional[str] = "en"
 
+# ========== PROVIDER BI DASHBOARD SCHEMAS ==========
+
+class ServiceProviderSchema(BaseModel):
+    id: int
+    user_id: int
+    business_name: str
+    business_type: str
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+    is_verified: bool
+    is_active: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class ServiceProviderCreateRequest(BaseModel):
+    business_name: str
+    business_type: str  # tour_operator, guide, accommodation, activity
+    description: Optional[str] = None
+    logo_url: Optional[str] = None
+    website: Optional[str] = None
+    phone: Optional[str] = None
+    address: Optional[str] = None
+
+class ReviewSchema(BaseModel):
+    id: int
+    tour_id: Optional[int] = None
+    provider_id: Optional[int] = None
+    user_id: Optional[int] = None
+    rating: int
+    title: Optional[str] = None
+    comment: Optional[str] = None
+    photos: Optional[List[str]] = None
+    is_verified: bool
+    helpful_count: int
+    response: Optional[str] = None
+    response_at: Optional[datetime] = None
+    created_at: datetime
+    user_name: Optional[str] = None
+    tour_name: Optional[str] = None
+    
+    class Config:
+        from_attributes = True
+
+class ReviewCreateRequest(BaseModel):
+    tour_id: Optional[int] = None
+    provider_id: Optional[int] = None
+    booking_id: Optional[int] = None
+    rating: int
+    title: Optional[str] = None
+    comment: Optional[str] = None
+    photos: Optional[List[str]] = None
+
+class ReviewResponseRequest(BaseModel):
+    response: str
+
+class MarketingCampaignSchema(BaseModel):
+    id: int
+    provider_id: int
+    name: str
+    campaign_type: str
+    description: Optional[str] = None
+    discount_percentage: Optional[float] = None
+    discount_amount: Optional[float] = None
+    start_date: datetime
+    end_date: datetime
+    budget: Optional[float] = None
+    spent: float
+    status: str
+    metrics: Optional[dict] = None
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+class MarketingCampaignCreateRequest(BaseModel):
+    name: str
+    campaign_type: str  # discount, promotion, email, social
+    description: Optional[str] = None
+    discount_percentage: Optional[float] = None
+    discount_amount: Optional[float] = None
+    start_date: datetime
+    end_date: datetime
+    budget: Optional[float] = None
+    target_audience: Optional[dict] = None
+
+class BookingAnalyticsResponse(BaseModel):
+    success: bool
+    period: dict
+    total_bookings: int
+    bookings_by_status: dict
+    bookings_by_day: dict
+    top_tours: List[dict]
+
+class CustomerInsightsResponse(BaseModel):
+    success: bool
+    unique_customers: int
+    actions_by_type: dict
+    conversion_funnel: dict
+    repeat_customer_rate: float
+    repeat_customers: int
+    total_customers: int
+    customer_locations: dict
+
+class RevenueAnalyticsResponse(BaseModel):
+    success: bool
+    total_revenue: float
+    net_revenue: float
+    platform_commission: float
+    commission_rate: float
+    revenue_by_method: dict
+    revenue_by_day: dict
+    revenue_by_tour: List[dict]
+    total_transactions: int
+
+class PerformanceMetricsResponse(BaseModel):
+    success: bool
+    total_reviews: int
+    average_rating: float
+    rating_distribution: dict
+    total_bookings: int
+    confirmed_bookings: int
+    cancellation_rate: float
+    total_views: int
+    conversion_rate: float
+    average_response_time_hours: Optional[float] = None
+    response_rate: float
+

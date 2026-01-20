@@ -123,16 +123,22 @@ class Tour(Base):
     duration = Column(String(100))
     location = Column(String(255), index=True)
     image_url = Column(String(500))
+    provider_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)  # Service provider
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     bookings = relationship("Booking", back_populates="tour", cascade="all, delete-orphan")
+    provider = relationship("User", foreign_keys=[provider_id])
+    reviews = relationship("Review", back_populates="tour", cascade="all, delete-orphan")
+    reviews = relationship("Review", back_populates="tour", cascade="all, delete-orphan")
 
     __table_args__ = (
         CheckConstraint('price >= 0', name='check_price_positive'),
         CheckConstraint('price_sol >= 0', name='check_price_sol_positive'),
         Index('idx_tours_location', 'location'),
         Index('idx_tours_created_at', 'created_at'),
+        Index('idx_tours_provider', 'provider_id'),
     )
 
 class Booking(Base):
@@ -947,5 +953,148 @@ class AISupportMessage(Base):
     
     __table_args__ = (
         Index('idx_ai_messages_conversation_created', 'conversation_id', 'created_at'),
+    )
+
+# ========== SERVICE PROVIDER & BUSINESS INTELLIGENCE MODELS ==========
+
+class ServiceProvider(Base):
+    """Service provider profile and settings"""
+    __tablename__ = "service_providers"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    business_name = Column(String(255), nullable=False, index=True)
+    business_type = Column(String(50), nullable=False)  # tour_operator, guide, accommodation, activity
+    description = Column(Text, nullable=True)
+    logo_url = Column(String(500), nullable=True)
+    website = Column(String(500), nullable=True)
+    phone = Column(String(50), nullable=True)
+    address = Column(Text, nullable=True)
+    tax_id = Column(String(100), nullable=True)
+    commission_rate = Column(Float, default=0.0, nullable=False)  # Platform commission percentage
+    payout_method = Column(String(50), nullable=True)  # bank_transfer, paypal, crypto
+    payout_details = Column(Text, nullable=True)  # JSON for payout information
+    is_verified = Column(Boolean, default=False, nullable=False, index=True)
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    user = relationship("User")
+    tours = relationship("Tour", foreign_keys="Tour.provider_id", back_populates="provider")
+    reviews = relationship("Review", back_populates="provider", cascade="all, delete-orphan")
+    campaigns = relationship("MarketingCampaign", back_populates="provider", cascade="all, delete-orphan")
+    
+    __table_args__ = (
+        Index('idx_providers_verified_active', 'is_verified', 'is_active'),
+    )
+
+class Review(Base):
+    """Customer reviews and ratings"""
+    __tablename__ = "reviews"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    tour_id = Column(Integer, ForeignKey("tours.id", ondelete="CASCADE"), nullable=True, index=True)
+    provider_id = Column(Integer, ForeignKey("service_providers.id", ondelete="CASCADE"), nullable=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    booking_id = Column(Integer, ForeignKey("bookings.id", ondelete="SET NULL"), nullable=True, index=True)
+    rating = Column(Integer, nullable=False, index=True)  # 1-5 stars
+    title = Column(String(255), nullable=True)
+    comment = Column(Text, nullable=True)
+    photos = Column(Text, nullable=True)  # JSON array of photo URLs
+    is_verified = Column(Boolean, default=False, nullable=False)  # Verified purchase
+    is_published = Column(Boolean, default=True, nullable=False, index=True)
+    helpful_count = Column(Integer, default=0, nullable=False)
+    response = Column(Text, nullable=True)  # Provider response
+    response_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    tour = relationship("Tour", back_populates="reviews")
+    provider = relationship("ServiceProvider", back_populates="reviews")
+    user = relationship("User")
+    booking = relationship("Booking")
+    
+    __table_args__ = (
+        CheckConstraint('rating >= 1 AND rating <= 5', name='check_rating_range'),
+        Index('idx_reviews_tour_rating', 'tour_id', 'rating'),
+        Index('idx_reviews_provider_rating', 'provider_id', 'rating'),
+        Index('idx_reviews_created_at', 'created_at'),
+    )
+
+class MarketingCampaign(Base):
+    """Marketing campaigns for service providers"""
+    __tablename__ = "marketing_campaigns"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey("service_providers.id", ondelete="CASCADE"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    campaign_type = Column(String(50), nullable=False, index=True)  # discount, promotion, email, social
+    description = Column(Text, nullable=True)
+    discount_percentage = Column(Float, nullable=True)
+    discount_amount = Column(Float, nullable=True)
+    target_audience = Column(Text, nullable=True)  # JSON for targeting criteria
+    start_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    end_date = Column(DateTime(timezone=True), nullable=False, index=True)
+    budget = Column(Float, nullable=True)
+    spent = Column(Float, default=0.0, nullable=False)
+    status = Column(String(20), default="draft", nullable=False, index=True)  # draft, active, paused, completed, cancelled
+    metrics = Column(Text, nullable=True)  # JSON for campaign metrics
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    provider = relationship("ServiceProvider", back_populates="campaigns")
+    
+    __table_args__ = (
+        Index('idx_campaigns_provider_status', 'provider_id', 'status'),
+        Index('idx_campaigns_dates', 'start_date', 'end_date'),
+    )
+
+class CustomerBehavior(Base):
+    """Track customer behavior and insights"""
+    __tablename__ = "customer_behaviors"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey("service_providers.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    action_type = Column(String(50), nullable=False, index=True)  # view_tour, add_to_cart, booking, cancellation, review
+    tour_id = Column(Integer, ForeignKey("tours.id", ondelete="SET NULL"), nullable=True, index=True)
+    metadata = Column(Text, nullable=True)  # JSON for additional data
+    session_id = Column(String(255), nullable=True, index=True)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False, index=True)
+    
+    provider = relationship("ServiceProvider")
+    user = relationship("User")
+    tour = relationship("Tour")
+    
+    __table_args__ = (
+        Index('idx_behaviors_provider_action', 'provider_id', 'action_type', 'created_at'),
+        Index('idx_behaviors_user_action', 'user_id', 'action_type'),
+    )
+
+class ProviderAnalytics(Base):
+    """Cached analytics data for providers"""
+    __tablename__ = "provider_analytics"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    provider_id = Column(Integer, ForeignKey("service_providers.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    period_start = Column(DateTime(timezone=True), nullable=False, index=True)
+    period_end = Column(DateTime(timezone=True), nullable=False, index=True)
+    total_bookings = Column(Integer, default=0, nullable=False)
+    total_revenue = Column(Float, default=0.0, nullable=False)
+    total_views = Column(Integer, default=0, nullable=False)
+    conversion_rate = Column(Float, default=0.0, nullable=False)  # Views to bookings
+    average_rating = Column(Float, default=0.0, nullable=False)
+    total_reviews = Column(Integer, default=0, nullable=False)
+    cancellation_rate = Column(Float, default=0.0, nullable=False)
+    repeat_customer_rate = Column(Float, default=0.0, nullable=False)
+    analytics_data = Column(Text, nullable=True)  # JSON for detailed analytics
+    last_calculated = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
+    
+    provider = relationship("ServiceProvider")
+    
+    __table_args__ = (
+        Index('idx_analytics_provider_period', 'provider_id', 'period_start', 'period_end'),
     )
 
