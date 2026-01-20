@@ -8,6 +8,7 @@ module.exports = {
   theme: {
     extend: {
       colors: {
+        // Default brand color palette
         primary: {
           50: '#f0f9ff',
           100: '#e0f2fe',
@@ -20,6 +21,9 @@ module.exports = {
           800: '#075985',
           900: '#0c4a6e',
         },
+        // Base border color used by `border-border` in globals.css
+        // This makes `@apply border-border` valid and keeps borders subtle.
+        border: '#e5e7eb', // Tailwind's gray-200
       },
       animation: {
         'fade-in': 'fadeIn 0.5s ease-in',
