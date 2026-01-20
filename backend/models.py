@@ -123,14 +123,13 @@ class Tour(Base):
     duration = Column(String(100))
     location = Column(String(255), index=True)
     image_url = Column(String(500))
-    provider_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)  # Service provider
+    provider_id = Column(Integer, ForeignKey("service_providers.id", ondelete="SET NULL"), nullable=True, index=True)  # Service provider
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     created_at = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
 
     bookings = relationship("Booking", back_populates="tour", cascade="all, delete-orphan")
-    provider = relationship("User", foreign_keys=[provider_id])
-    reviews = relationship("Review", back_populates="tour", cascade="all, delete-orphan")
+    provider = relationship("ServiceProvider", foreign_keys=[provider_id], back_populates="tours")
     reviews = relationship("Review", back_populates="tour", cascade="all, delete-orphan")
 
     __table_args__ = (

@@ -16,7 +16,7 @@ from database import SessionLocal, engine, Base
 from models import (
     Tour, Booking, Payment, User, Invoice, Feedback, DataConsent, DataRetentionLog, BackupRecord, AuditLog,
     ForumPost, ForumReply, SupportTicket, SupportMessage, FAQ, SupportAgent, Tutorial, LocalSupport,
-    AISupportConversation, AISupportMessage
+    AISupportConversation, AISupportMessage, ServiceProvider, Review, MarketingCampaign, CustomerBehavior, ProviderAnalytics
 )
 from schemas import (
     TourSchema, BookingSchema, PaymentSchema, PaymentRequest,
